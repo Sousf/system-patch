@@ -108,23 +108,19 @@ type Model struct {
 	tab        int
 	tabOrigins []model.Origin
 
-	// Set while the upgrade confirmation is on screen.
+	// Set while the install confirmation is on screen, holding what y runs.
 	confirming bool
+	plan       installPlan
 	// When the running analysis started, for the elapsed-time readout.
 	agentStart time.Time
 }
 
-// upgradeSteps is every manager the upgrade has to drive, in order.
+// upgradeSteps is every manager the full upgrade has to drive, in order.
 //
-// It is a FULL upgrade, and single-package install is deliberately not
-// offered. `pacman -S one-package` resolves against the synced database and
-// pulls in libraries built for packages you have not upgraded yet — the
-// partial-upgrade breakage Arch warns about, and the most common way to end up
-// with a system that will not boot. There is no safe single-package path, so
-// the honest options are a full upgrade or nothing.
-//
-// The set is detected rather than hardcoded, so "full system upgrade" means
-// every manager actually installed here and not just the one Arch ships.
+// Detected rather than hardcoded, so "full system upgrade" means every manager
+// actually installed here and not just the one Arch ships. Single-package
+// installs are handled separately by installPlan, which knows which origins
+// have a safe per-package path and which do not.
 func upgradeSteps() [][]string {
 	var steps [][]string
 	for _, m := range sources.Managers() {
@@ -181,6 +177,63 @@ func upgradeLabel() string {
 	return strings.Join(names, " + ")
 }
 
+// installPlan is what pressing the install key will actually run, decided by
+// what is selected. The distinction matters because "install just this one"
+// is safe for some origins and a footgun for others:
+//
+//   - An AUR package builds against the system as it stands — no database
+//     sync, no partial upgrade. `paru -S name` is safe and is what you meant.
+//   - A flatpak ref is independent by design; updating one app is the normal
+//     way to use flatpak.
+//   - A repository package has NO safe single-package path: getting the new
+//     version requires syncing the database, and installing one package from
+//     a synced database is the partial-upgrade breakage Arch warns about.
+//     Selecting one therefore still offers the full upgrade, and the
+//     confirmation says why rather than silently widening the request.
+type installPlan struct {
+	argv  []string
+	label string
+	// full marks the whole-system chain across every manager.
+	full bool
+	// why explains a widened plan, shown in the confirmation.
+	why string
+}
+
+func (m *Model) installPlan() installPlan {
+	u, ok := m.sel()
+	if !ok || agent.IsSystem(u) {
+		return installPlan{argv: upgradeCmd(), label: upgradeLabel(), full: true}
+	}
+	switch u.Origin {
+	case model.AUR:
+		return installPlan{
+			argv:  []string{"paru", "-S", u.Name},
+			label: "paru -S " + u.Name,
+		}
+	case model.Flatpak:
+		// The row is app/branch; flatpak addresses updates by application id
+		// and updates every installed branch of it, which is what you want —
+		// two branches of one runtime deliberately move together.
+		app, _, _ := strings.Cut(u.Name, "/")
+		return installPlan{
+			argv:  []string{"flatpak", "update", app},
+			label: "flatpak update " + app,
+		}
+	case model.Origin("snap"):
+		return installPlan{
+			argv:  []string{"sudo", "snap", "refresh", u.Name},
+			label: "sudo snap refresh " + u.Name,
+		}
+	}
+	return installPlan{
+		argv:  upgradeCmd(),
+		label: upgradeLabel(),
+		full:  true,
+		why: u.Name + " is a repository package, and one repo package cannot " +
+			"be safely installed alone (partial upgrade)",
+	}
+}
+
 type upgradeDoneMsg struct{ err error }
 
 // runUpgrade hands the terminal to the package manager.
@@ -189,8 +242,7 @@ type upgradeDoneMsg struct{ err error }
 // real terminal for the sudo password and for pacman's own conflict and
 // replacement prompts. Answering those blind through a captured pipe is how
 // people confirm things they did not read.
-func runUpgrade() tea.Cmd {
-	argv := upgradeCmd()
+func runUpgrade(argv []string) tea.Cmd {
 	c := exec.Command(argv[0], argv[1:]...)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return upgradeDoneMsg{err: err}
@@ -467,7 +519,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y":
 			m.confirming = false
-			return m, runUpgrade()
+			return m, runUpgrade(m.plan.argv)
 		default:
 			m.confirming = false
 			return m, nil
@@ -593,6 +645,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.agentRunning {
 			return m, nil
 		}
+		m.plan = m.installPlan()
 		m.confirming = true
 		return m, nil
 
@@ -1065,7 +1118,7 @@ func (m Model) renderAgent() string {
 	if v, ok := render.FindVerdict(m.agentText); ok {
 		b.WriteString(verdictBanner(v, m.vp.Width) + "\n")
 		if render.Urgency(v) > 0 {
-			b.WriteString(stDim.Render("  i to upgrade the system") + "\n")
+			b.WriteString(stDim.Render("  i to install (confirms first)") + "\n")
 		}
 	}
 
@@ -1172,7 +1225,7 @@ func (m Model) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
-	keys := "↑↓ move · ←→ manager · a analyse · i upgrade · r reload · R rescan · q quit"
+	keys := "↑↓ move · ←→ manager · a analyse · i install · r reload · R rescan · q quit"
 	if m.mode == paneAgent && m.agentRunning {
 		keys = "x cancel · tab scroll · esc back · q quit"
 	} else if m.focusRight {
@@ -1180,13 +1233,17 @@ func (m Model) View() string {
 	}
 
 	if m.confirming {
-		argv := upgradeLabel()
-		// Names the exact command and says plainly that it is system-wide.
-		// "Install this package" is what was asked for and is not a thing Arch
-		// can safely do; being vague here would let that misunderstanding
-		// survive right up until something breaks.
-		keys = stYellow.Render("run `"+argv+"`? ") +
-			stDim.Render("full system upgrade, not just this package — y / n")
+		// Names exactly what y will run. When the plan is wider than the
+		// selection — a repo package, where no safe single-package path
+		// exists — it says so and why, rather than letting "install this one"
+		// silently become "upgrade everything".
+		note := "y / n"
+		if m.plan.why != "" {
+			note = m.plan.why + " — y / n"
+		} else if m.plan.full {
+			note = "every manager, everything pending — y / n"
+		}
+		keys = stYellow.Render("run `"+m.plan.label+"`? ") + stDim.Render(note)
 	}
 
 	return fmt.Sprintf("%s%s\n%s\n%s\n\n%s",

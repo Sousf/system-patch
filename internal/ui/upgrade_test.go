@@ -4,6 +4,9 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/Sousf/patchlens/internal/agent"
+	"github.com/Sousf/patchlens/internal/model"
 )
 
 func TestShellJoinQuotesDangerousArgs(t *testing.T) {
@@ -56,5 +59,34 @@ func TestShellJoinRoundTrips(t *testing.T) {
 		if got[i] != argv[i] {
 			t.Errorf("arg %d: got %q, want %q", i, got[i], argv[i])
 		}
+	}
+}
+
+// TestInstallPlanMatchesSelection is the contract the install key keeps:
+// what you selected is what gets installed, except where no safe
+// single-package path exists — and then the plan says so.
+func TestInstallPlanMatchesSelection(t *testing.T) {
+	m := New()
+	m.updates = []model.Update{
+		agent.SystemUpdate,
+		{Name: "google-chrome", Origin: model.AUR},
+		{Name: "org.freedesktop.Platform.GL.default/25.08", Origin: model.Flatpak},
+		{Name: "openssl", Origin: model.Repo},
+	}
+
+	sel := func(i int) installPlan { m.cursor = i; return m.installPlan() }
+
+	if p := sel(1); p.full || strings.Join(p.argv, " ") != "paru -S google-chrome" {
+		t.Errorf("AUR selection: got %+v", p)
+	}
+	if p := sel(2); p.full ||
+		strings.Join(p.argv, " ") != "flatpak update org.freedesktop.Platform.GL.default" {
+		t.Errorf("flatpak selection: got %+v", p)
+	}
+	if p := sel(3); !p.full || p.why == "" {
+		t.Errorf("repo selection must widen with a stated reason: got %+v", p)
+	}
+	if p := sel(0); !p.full || p.why != "" {
+		t.Errorf("system row: got %+v", p)
 	}
 }
