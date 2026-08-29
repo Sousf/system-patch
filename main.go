@@ -21,6 +21,7 @@ import (
 
 	"github.com/Sousf/patchlens/internal/adapters"
 	"github.com/Sousf/patchlens/internal/agent"
+	"github.com/Sousf/patchlens/internal/cache"
 	"github.com/Sousf/patchlens/internal/model"
 	"github.com/Sousf/patchlens/internal/render"
 	"github.com/Sousf/patchlens/internal/sources"
@@ -53,6 +54,11 @@ Keys inside the interface:
 `
 
 func main() {
+	// Reap cache entries no reader can serve and scratch directories orphaned
+	// by killed runs. In the background: it is pure hygiene, and startup —
+	// especially `patchlens count` from a status bar — must not wait on it.
+	go cache.Sweep()
+
 	args := os.Args[1:]
 	if len(args) == 0 {
 		if err := ui.Run(); err != nil {

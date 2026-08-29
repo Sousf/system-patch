@@ -18,7 +18,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/Sousf/patchlens/internal/adapters"
 	"github.com/Sousf/patchlens/internal/cache"
@@ -85,9 +84,10 @@ func settings(u model.Update) (modelID, effort string) {
 	return modelID, effort
 }
 
-// workRoot is the parent for per-run scratch directories. Under the cache, so
-// anything a killed run leaves behind is swept up with the rest of the cache
-// rather than accumulating in the user's home.
+// workRoot is the parent for per-run scratch directories. Under the cache so
+// cache.Sweep can reap what a killed run leaves behind — the run's own
+// RemoveAll only fires on clean exit, and three killed test runs left 5.5MB
+// of cloned source trees here before the sweeper existed.
 func workRoot() string {
 	p := filepath.Join(cache.Dir(), "work")
 	if os.MkdirAll(p, 0o700) != nil {
@@ -325,7 +325,7 @@ func storeKey(u model.Update) string {
 // LoadStored returns a previous analysis of this exact update, if there is one.
 func LoadStored(u model.Update) (Stored, bool) {
 	var s Stored
-	if cache.Get(storeKey(u), 90*24*time.Hour, &s) && strings.TrimSpace(s.Text) != "" {
+	if cache.Get(storeKey(u), cache.AnalysisTTL, &s) && strings.TrimSpace(s.Text) != "" {
 		return s, true
 	}
 	return Stored{}, false

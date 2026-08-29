@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Sousf/patchlens/internal/cache"
 	"github.com/Sousf/patchlens/internal/model"
@@ -259,7 +258,7 @@ var all = []adapter{Chrome, GitHub, GitLab}
 func For(u model.Update, refresh bool) model.Notes {
 	key := "notes-" + u.Name + "@" + u.Cur + ".." + u.New
 	var n model.Notes
-	if !refresh && cache.Get(key, 7*24*time.Hour, &n) {
+	if !refresh && cache.Get(key, cache.NotesTTL, &n) {
 		return n
 	}
 
