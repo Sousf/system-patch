@@ -17,6 +17,10 @@ type Origin string
 const (
 	Repo Origin = "repo"
 	AUR  Origin = "aur"
+	// Flatpak apps and runtimes. A separate manager with its own remotes, so
+	// `pacman -Syu` and `paru -Syu` never touch them however complete they
+	// look — which is exactly why they go stale unnoticed.
+	Flatpak Origin = "flatpak"
 )
 
 // Update is one pending package update.

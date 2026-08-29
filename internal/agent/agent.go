@@ -385,22 +385,44 @@ func SystemPrompt(ups []model.Update) string {
 
 	fmt.Fprintf(&b, "Assess what happens if this Arch Linux system is fully "+
 		"upgraded right now.\n\n")
-	fmt.Fprintf(&b, "The command would be `paru -Syu`: every repository package "+
-		"and every AUR package, in one transaction.\n")
-
-	var repo, aur []model.Update
+	var repo, aur, fp []model.Update
 	for _, u := range ups {
 		if IsSystem(u) {
 			continue
 		}
-		if u.Origin == model.AUR {
+		switch u.Origin {
+		case model.AUR:
 			aur = append(aur, u)
-		} else {
+		case model.Flatpak:
+			fp = append(fp, u)
+		default:
 			repo = append(repo, u)
 		}
 	}
-	fmt.Fprintf(&b, "\nSCALE\n  %d repository packages, %s\n",
-		len(repo), plural(len(aur), "AUR package"))
+
+	// The managers are enumerated at runtime, so this brief describes the
+	// machine it is actually running on rather than an assumed Arch desktop.
+	ms := sources.Managers()
+	fmt.Fprintf(&b, "PACKAGE MANAGERS ON THIS MACHINE (all of them are upgraded)\n")
+	for _, m := range ms {
+		listed := "listed below"
+		if m.List == nil {
+			listed = "not itemised"
+		}
+		fmt.Fprintf(&b, "  %-20s %-14s %s\n    %s\n",
+			m.Name, listed, strings.Join(m.Upgrade, " "), m.Note)
+	}
+	if un := sources.Unmanaged(); len(un) > 0 {
+		fmt.Fprintf(&b, "\nINSTALLED BUT NOT UPGRADED BY ANY OF THEM\n")
+		for _, u := range un {
+			fmt.Fprintf(&b, "  %s\n", u)
+		}
+		fmt.Fprintf(&b, "  Mention these only if something in this transaction "+
+			"actually affects them.\n")
+	}
+	fmt.Fprintf(&b, "\nSCALE\n  %d repository packages, %s, %s\n",
+		len(repo), plural(len(aur), "AUR package"),
+		plural(len(fp), "flatpak ref"))
 
 	// The AUR half is listed in full however long it gets. These are the
 	// packages nothing rebuilds automatically, so they are the ones the answer
@@ -410,6 +432,19 @@ func SystemPrompt(ups []model.Update) string {
 		for _, u := range aur {
 			fmt.Fprintf(&b, "  %s  %s -> %s\n", u.Name, u.Cur, u.New)
 		}
+	}
+
+	// Flatpak is listed in full and called out as a separate manager, because
+	// its runtimes are coupled to host packages in ways neither manager knows
+	// about — a GL runtime pinned to a host driver version is the usual case.
+	if len(fp) > 0 {
+		fmt.Fprintf(&b, "\nFLATPAK (separate manager; no pacman command touches these)\n")
+		for _, u := range fp {
+			fmt.Fprintf(&b, "  %s  installed %s -> commit %s\n", u.Name, u.Cur, u.New)
+		}
+		fmt.Fprintf(&b, "  Check whether any flatpak runtime is pinned to a host package "+
+			"version (GL and VAAPI extensions usually are). If the host driver and the "+
+			"runtime move apart, acceleration inside flatpak apps stops working.\n")
 	}
 
 	fmt.Fprintf(&b, "\nSECURITY-FLAGGED IN THIS SET\n")
@@ -497,11 +532,13 @@ Then, under their own headings:
    anything reachable in normal desktop use.
 2. MANUAL INTERVENTION — for each news item, whether it applies to this machine
    and what to do. Say plainly when one does not apply.
-3. AUR FALLOUT — which AUR packages are at risk from a repository library
-   moving, and which will simply rebuild. These are the ones no upgrade fixes
-   for you.
+3. AUR AND FLATPAK FALLOUT — which AUR packages are at risk from a repository
+   library moving, and whether any flatpak runtime is pinned to a host package
+   that is changing. These live outside pacman, so nothing rebuilds them for
+   you.
 4. AFTERWARDS — reboots, service restarts, .pacnew configuration files, and
-   anything that will look broken until a step is taken.
+   anything that will look broken until a step is taken. Include anything the
+   upgrade does NOT cover that this transaction puts at risk.
 5. IF IT GOES WRONG — the specific recovery path for this transaction. Note
    that this machine has snapper with snap-pac, so pacman takes a pre-upgrade
    snapshot automatically.

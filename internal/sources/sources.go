@@ -297,35 +297,52 @@ func Load(maxAge time.Duration) Result {
 	return r
 }
 
+// rank orders origins by how little else is watching them.
+func rank(o model.Origin) int {
+	switch o {
+	case model.AUR:
+		return 0
+	case model.Flatpak:
+		return 1
+	}
+	return 2
+}
+
 // Collect gathers every pending update and enriches it.
 func Collect() Result {
 	// The three slow inputs are independent and all I/O bound: checkupdates
 	// syncs a temp database, paru and arch-audit both hit the network.
 	// Serially this is the entire startup cost; concurrently it is the slowest
 	// one alone.
+	// Every manager present on this machine enumerates concurrently, alongside
+	// the security tracker. Which managers those are is decided at runtime, so
+	// this is not an Arch-only tool by construction.
 	var (
-		wg        sync.WaitGroup
-		repo, aur []model.Update
-		adv       map[string]Advisory
+		wg  sync.WaitGroup
+		ups []model.Update
+		adv map[string]Advisory
 	)
-	wg.Add(3)
-	go func() { defer wg.Done(); repo = RepoUpdates() }()
-	go func() { defer wg.Done(); aur = AURUpdates() }()
+	wg.Add(2)
+	go func() { defer wg.Done(); ups = ManagerUpdates() }()
 	go func() { defer wg.Done(); adv = Advisories() }()
 	wg.Wait()
 
-	res := Result{Updates: append(repo, aur...)}
+	res := Result{Updates: ups}
 	if len(res.Updates) == 0 {
 		return res
 	}
 
-	repoNames := make([]string, 0, len(repo))
-	for _, u := range repo {
-		repoNames = append(repoNames, u.Name)
-	}
-	aurNames := make([]string, 0, len(aur))
-	for _, u := range aur {
-		aurNames = append(aurNames, u.Name)
+	// Grouped by origin rather than by position. The enumerators now run from
+	// a runtime-detected registry, so which managers contributed rows — and in
+	// what order — is not known at compile time.
+	var repoNames, aurNames []string
+	for _, u := range res.Updates {
+		switch u.Origin {
+		case model.Repo:
+			repoNames = append(repoNames, u.Name)
+		case model.AUR:
+			aurNames = append(aurNames, u.Name)
+		}
 	}
 
 	var (
@@ -345,19 +362,22 @@ func Collect() Result {
 	}
 	changed := CheckProvenance(meta)
 
+	var aurRows []model.Update
 	for i := range res.Updates {
 		u := &res.Updates[i]
-		if u.Origin == model.Repo {
+		switch u.Origin {
+		case model.Repo:
 			u.URL = urls[u.Name]
 			if a, ok := adv[u.Name]; ok {
 				u.CVEs, u.Severity = a.CVEs, a.Severity
 			}
-			continue
-		}
-		m := meta[u.Name]
-		u.URL, u.Maintainer, u.OutOfDate = m.URL, m.Maintainer, m.OutOfDate
-		if prev, ok := changed[u.Name]; ok {
-			u.MaintainerWas = prev
+		case model.AUR:
+			m := meta[u.Name]
+			u.URL, u.Maintainer, u.OutOfDate = m.URL, m.Maintainer, m.OutOfDate
+			if prev, ok := changed[u.Name]; ok {
+				u.MaintainerWas = prev
+			}
+			aurRows = append(aurRows, *u)
 		}
 	}
 
@@ -365,7 +385,20 @@ func Collect() Result {
 	// selection, because nothing else on this machine watches the AUR and an
 	// unenriched AUR row would sort as routine. The repo half already has
 	// Security Tracker data, so it stays lazy.
-	adapters.Enrich(res.Updates[len(repo):])
+	//
+	// Enriched through a name index rather than a slice range: the rows are no
+	// longer grouped by origin in the underlying slice.
+	adapters.Enrich(aurRows)
+	byName := make(map[string]model.Update, len(aurRows))
+	for _, u := range aurRows {
+		byName[u.Name] = u
+	}
+	for i := range res.Updates {
+		if e, ok := byName[res.Updates[i].Name]; ok && res.Updates[i].Origin == model.AUR {
+			res.Updates[i].UpstreamCVEs = e.UpstreamCVEs
+			res.Updates[i].UpstreamKind = e.UpstreamKind
+		}
+	}
 
 	// Flagged first, then AUR ahead of repo. AUR outranks repo at equal
 	// standing because nothing else on the machine is watching it.
@@ -374,8 +407,11 @@ func Collect() Result {
 		if a.Flagged() != b.Flagged() {
 			return a.Flagged()
 		}
-		if (a.Origin == model.AUR) != (b.Origin == model.AUR) {
-			return a.Origin == model.AUR
+		// AUR first, then flatpak, then repo: both of the first two are
+		// outside the Security Tracker's view, so nothing else on the machine
+		// is watching them.
+		if rank(a.Origin) != rank(b.Origin) {
+			return rank(a.Origin) < rank(b.Origin)
 		}
 		return a.Name < b.Name
 	})

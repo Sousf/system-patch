@@ -103,28 +103,82 @@ type Model struct {
 	// True when the pane is showing a stored analysis rather than a live run.
 	fromCache bool
 
+	// Tab state: 0 is the combined view, i>0 selects tabOrigins[i-1]. The
+	// cursor indexes the visible (filtered) list, not m.updates.
+	tab        int
+	tabOrigins []model.Origin
+
 	// Set while the upgrade confirmation is on screen.
 	confirming bool
 	// When the running analysis started, for the elapsed-time readout.
 	agentStart time.Time
 }
 
-// upgradeCmd is the command the install key runs.
+// upgradeSteps is every manager the upgrade has to drive, in order.
 //
-// It is a FULL system upgrade, and single-package install is deliberately not
+// It is a FULL upgrade, and single-package install is deliberately not
 // offered. `pacman -S one-package` resolves against the synced database and
 // pulls in libraries built for packages you have not upgraded yet — the
 // partial-upgrade breakage Arch warns about, and the most common way to end up
 // with a system that will not boot. There is no safe single-package path, so
 // the honest options are a full upgrade or nothing.
 //
-// paru drives pacman and handles AUR rebuilds in the same pass, so it is
-// preferred when present; without it the repo half still upgrades.
-func upgradeCmd() []string {
-	if _, err := exec.LookPath("paru"); err == nil {
-		return []string{"paru", "-Syu"}
+// The set is detected rather than hardcoded, so "full system upgrade" means
+// every manager actually installed here and not just the one Arch ships.
+func upgradeSteps() [][]string {
+	var steps [][]string
+	for _, m := range sources.Managers() {
+		steps = append(steps, m.Upgrade)
 	}
-	return []string{"sudo", "pacman", "-Syu"}
+	return steps
+}
+
+// upgradeCmd renders the steps as one shell line, for display and execution.
+//
+// Chained with && rather than ;: if a manager fails, or you abort at its
+// confirmation prompt, that is a decision not to upgrade, and running the next
+// one anyway would ignore it.
+func upgradeCmd() []string {
+	steps := upgradeSteps()
+	if len(steps) == 0 {
+		return []string{"true"}
+	}
+	if len(steps) == 1 {
+		return steps[0]
+	}
+	var parts []string
+	for _, s := range steps {
+		parts = append(parts, shellJoin(s))
+	}
+	return []string{"sh", "-c", strings.Join(parts, " && ")}
+}
+
+// shellJoin quotes any argument that would otherwise be split or expanded.
+//
+// Needed because one of these commands is a Lua snippet full of spaces,
+// braces and parentheses; pasted raw into `sh -c` it becomes several broken
+// arguments instead of one.
+func shellJoin(argv []string) string {
+	out := make([]string, 0, len(argv))
+	for _, a := range argv {
+		if a == "" || strings.ContainsAny(a, " \t\n\"'$&|;<>(){}*?[]!#~`\\") {
+			out = append(out, "'"+strings.ReplaceAll(a, "'", `'\''`)+"'")
+		} else {
+			out = append(out, a)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// upgradeLabel names the managers rather than spelling out every command, so
+// the confirmation stays readable when one of them is a Lua one-liner.
+func upgradeLabel() string {
+	ms := sources.Managers()
+	names := make([]string, 0, len(ms))
+	for _, m := range ms {
+		names = append(names, m.Name)
+	}
+	return strings.Join(names, " + ")
 }
 
 type upgradeDoneMsg struct{ err error }
@@ -195,11 +249,42 @@ func waitAgent(ch <-chan agent.Line) tea.Cmd {
 	}
 }
 
+// visible is the list the cursor moves through: everything on the combined
+// tab, one manager's rows on the others. The synthetic whole-system row lives
+// only on the combined tab — it is not a package from any single manager.
+func (m *Model) visible() []model.Update {
+	if m.tab == 0 || m.tab > len(m.tabOrigins) {
+		return m.updates
+	}
+	want := m.tabOrigins[m.tab-1]
+	var out []model.Update
+	for _, u := range m.updates {
+		if u.Origin == want {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
 func (m *Model) sel() (model.Update, bool) {
-	if m.cursor < 0 || m.cursor >= len(m.updates) {
+	v := m.visible()
+	if m.cursor < 0 || m.cursor >= len(v) {
 		return model.Update{}, false
 	}
-	return m.updates[m.cursor], true
+	return v[m.cursor], true
+}
+
+// setTab switches tabs, resetting the cursor: an index into one filtered list
+// is meaningless in another.
+func (m *Model) setTab(t int) tea.Cmd {
+	n := len(m.tabOrigins) + 1
+	m.tab = ((t % n) + n) % n
+	m.cursor = 0
+	m.mode = paneNotes
+	cmd := m.ensureNotes()
+	m.refreshPane()
+	m.vp.GotoTop()
+	return cmd
 }
 
 // ensureNotes fetches the selected package's notes if they are not already in
@@ -222,7 +307,7 @@ func (m *Model) layout() {
 	if rw < 20 {
 		rw = 20
 	}
-	// Two lines of chrome above (title, blank) and two below (blank, help).
+	// Chrome: title, tab bar, and below the body a blank line and the help.
 	vh := m.h - 4
 	if vh < 3 {
 		vh = 3
@@ -296,6 +381,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// answers, and it is usually the one being asked.
 		m.updates = append([]model.Update{agent.SystemEntry(msg.Updates)}, msg.Updates...)
 		m.warnings = msg.Warnings
+		// One tab per origin actually present, in the same rank order as the
+		// list itself. Derived from the data, not the registry, so a manager
+		// with nothing pending does not get an empty tab.
+		seen := map[model.Origin]bool{}
+		m.tabOrigins = nil
+		for _, u := range msg.Updates {
+			if !seen[u.Origin] {
+				seen[u.Origin] = true
+				m.tabOrigins = append(m.tabOrigins, u.Origin)
+			}
+		}
+		m.tab = 0
 		m.cursor = 0
 		if cmd := m.ensureNotes(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -404,7 +501,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focusRight {
 			break
 		}
-		if m.cursor < len(m.updates)-1 {
+		if m.cursor < len(m.visible())-1 {
 			m.cursor++
 			m.mode = paneNotes
 			if cmd := m.ensureNotes(); cmd != nil {
@@ -431,7 +528,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case "g":
-		if !m.focusRight && len(m.updates) > 0 {
+		if !m.focusRight && len(m.visible()) > 0 {
 			m.cursor = 0
 			m.mode = paneNotes
 			if cmd := m.ensureNotes(); cmd != nil {
@@ -442,8 +539,8 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case "G":
-		if !m.focusRight && len(m.updates) > 0 {
-			m.cursor = len(m.updates) - 1
+		if !m.focusRight && len(m.visible()) > 0 {
+			m.cursor = len(m.visible()) - 1
 			m.mode = paneNotes
 			if cmd := m.ensureNotes(); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -473,6 +570,16 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// belongs behind a key you meant to press.
 		m.focusRight = true
 		return m, nil
+
+	case "h", "left":
+		if !m.focusRight {
+			return m, m.setTab(m.tab - 1)
+		}
+
+	case "l", "right":
+		if !m.focusRight {
+			return m, m.setTab(m.tab + 1)
+		}
 
 	case "a":
 		return m.startAgent(false)
@@ -654,8 +761,9 @@ func (m Model) renderList(w int) string {
 	}
 
 	var b strings.Builder
-	for i := top; i < len(m.updates) && i < top+vis; i++ {
-		u := m.updates[i]
+	rows := m.visible()
+	for i := top; i < len(rows) && i < top+vis; i++ {
+		u := rows[i]
 		// Prefix is two cells of cursor plus badge and a space.
 		line := "  " + badge(u) + " " + truncate(u.Name, avail-4)
 		if i == m.cursor {
@@ -863,27 +971,50 @@ func verdictBanner(v render.Verdict, w int) string {
 func (m Model) renderSystem() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", stBold.Render("Full system upgrade"))
-	fmt.Fprintf(&b, "%s\n\n", stDim.Render(strings.Join(upgradeCmd(), " ")))
+	fmt.Fprintf(&b, "%s\n\n", stDim.Render(truncate(upgradeLabel(), m.vp.Width)))
 
-	var repo, aur, flagged int
+	var repo, aur, fp, flagged int
 	for _, u := range m.updates {
 		if agent.IsSystem(u) {
 			continue
 		}
-		if u.Origin == model.AUR {
+		switch u.Origin {
+		case model.AUR:
 			aur++
-		} else {
+		case model.Flatpak:
+			fp++
+		default:
 			repo++
 		}
 		if u.Flagged() {
 			flagged++
 		}
 	}
-	fmt.Fprintf(&b, "%d repository · %d AUR", repo, aur)
+	fmt.Fprintf(&b, "%d repository · %d AUR · %d flatpak", repo, aur, fp)
 	if flagged > 0 {
 		fmt.Fprintf(&b, " · %s", stRed.Render(fmt.Sprintf("%d flagged", flagged)))
 	}
 	b.WriteString("\n\n")
+
+	// Named explicitly so the claim "full system upgrade" can be checked
+	// rather than taken on trust. Which managers appear here is detected at
+	// runtime, so this is the machine's real answer and not an assumption.
+	fmt.Fprintf(&b, "%s\n", stBold.Render("Managers it will drive"))
+	for _, mg := range sources.Managers() {
+		suffix := ""
+		if mg.List == nil {
+			suffix = stDim.Render("  (not itemised)")
+		}
+		fmt.Fprintf(&b, "  %s%s\n", truncate(mg.Name, m.vp.Width-6), suffix)
+	}
+	if un := sources.Unmanaged(); len(un) > 0 {
+		fmt.Fprintf(&b, "\n%s\n", stDim.Render("Not covered by any of them:"))
+		for _, u := range un {
+			head, _, _ := strings.Cut(u, " —")
+			fmt.Fprintf(&b, "%s\n", stDim.Render(truncate("  · "+head, m.vp.Width)))
+		}
+	}
+	b.WriteString("\n")
 
 	news := sources.News(6)
 	var urgent []sources.NewsItem
@@ -984,6 +1115,35 @@ func (m Model) renderAgent() string {
 	return b.String()
 }
 
+// renderTabs is the manager tab bar: the combined view first, then one tab
+// per origin that actually has pending rows.
+func (m Model) renderTabs() string {
+	if len(m.tabOrigins) == 0 {
+		return ""
+	}
+	label := func(i int, text string, n int) string {
+		t := fmt.Sprintf(" %s %d ", text, n)
+		if i == m.tab {
+			return stBold.Render(stMauve.Render(t))
+		}
+		return stDim.Render(t)
+	}
+	counts := map[model.Origin]int{}
+	total := 0
+	for _, u := range m.updates {
+		if agent.IsSystem(u) {
+			continue
+		}
+		counts[u.Origin]++
+		total++
+	}
+	parts := []string{label(0, "all", total)}
+	for i, o := range m.tabOrigins {
+		parts = append(parts, label(i+1, string(o), counts[o]))
+	}
+	return strings.Join(parts, stDim.Render("·"))
+}
+
 func (m Model) View() string {
 	if m.w == 0 {
 		return "starting…"
@@ -1012,7 +1172,7 @@ func (m Model) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
-	keys := "↑↓ move · a analyse · i upgrade · r reload · R rescan · tab scroll · q quit"
+	keys := "↑↓ move · ←→ manager · a analyse · i upgrade · r reload · R rescan · q quit"
 	if m.mode == paneAgent && m.agentRunning {
 		keys = "x cancel · tab scroll · esc back · q quit"
 	} else if m.focusRight {
@@ -1020,7 +1180,7 @@ func (m Model) View() string {
 	}
 
 	if m.confirming {
-		argv := strings.Join(upgradeCmd(), " ")
+		argv := upgradeLabel()
 		// Names the exact command and says plainly that it is system-wide.
 		// "Install this package" is what was asked for and is not a thing Arch
 		// can safely do; being vague here would let that misunderstanding
@@ -1029,8 +1189,8 @@ func (m Model) View() string {
 			stDim.Render("full system upgrade, not just this package — y / n")
 	}
 
-	return fmt.Sprintf("%s%s\n\n%s\n\n%s",
-		title, sub, body, stDim.Render(keys))
+	return fmt.Sprintf("%s%s\n%s\n%s\n\n%s",
+		title, sub, m.renderTabs(), body, stDim.Render(keys))
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
