@@ -111,7 +111,31 @@ var allowedTools = []string{
 	// change was the whole supply-chain question.
 	"Bash(sha256sum:*)", "Bash(sha512sum:*)", "Bash(b2sum:*)",
 	"Bash(md5sum:*)", "Bash(tar:*)", "Bash(file:*)", "Bash(diff:*)",
+	// Read-only ways to inspect the local system. pactree walks the dependency
+	// graph and uname identifies the running kernel, both of which the
+	// breakage question turns on.
+	"Bash(pactree:*)", "Bash(uname:*)", "Bash(expac:*)",
 }
+
+// dbNote tells the agent how to inspect the package database without pacman.
+//
+// pacman is denied outright, and that denial is worth keeping: a tool whose
+// job is answering "should I install this?" must not be able to install it.
+// But the denial is by command name, so it also blocks the harmless read-only
+// queries (-Qi, -Si, -Qmq) the analysis genuinely wants. A run was observed
+// spending three turns discovering this before working it out for itself.
+//
+// Saying so up front costs nothing and buys those turns back.
+const dbNote = `
+INSPECTING THIS SYSTEM
+pacman is not available to you — it is blocked so that an analysis cannot
+change the machine it is describing. Read the local database directly instead:
+
+  /var/lib/pacman/local/<name>-<version>/desc   installed packages
+  /var/lib/pacman/sync/*.db                     repository metadata (tar)
+
+pactree, uname and expac do work if you need them.
+`
 
 // Tools denied outright. This is the half that actually constrains.
 //
@@ -219,6 +243,7 @@ func Prompt(u model.Update, n model.Notes) string {
 		fmt.Fprintf(&b, "\nNo upstream release notes: %s (%s)\n", n.Err, n.Source)
 	}
 
+	b.WriteString(dbNote)
 	b.WriteString(`
 TASK
 Read the actual source diff, not just the release notes.
@@ -444,6 +469,7 @@ func SystemPrompt(ups []model.Update) string {
 		fmt.Fprintf(&b, "  %s %s -> %s\n", u.Name, u.Cur, u.New)
 	}
 
+	b.WriteString(dbNote)
 	b.WriteString(`
 TASK
 Work out what actually happens if this upgrade runs now. Investigate before
