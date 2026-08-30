@@ -1,0 +1,22 @@
+pkgbase = system-patch-git
+	pkgdesc = TUI that shows every pending package update, why it was pushed, and whether to take it
+	pkgver = r8.c29bd17
+	pkgrel = 1
+	url = https://github.com/Sousf/system-patch
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = go
+	makedepends = git
+	depends = glibc
+	optdepends = pacman-contrib: repo updates via checkupdates
+	optdepends = paru: AUR updates
+	optdepends = arch-audit: Security Tracker CVEs
+	optdepends = github-cli: raises the GitHub API rate limit to 5000/hour
+	optdepends = claude-code: source analysis with the a key
+	provides = system-patch
+	conflicts = system-patch
+	source = system-patch-git::git+https://github.com/Sousf/system-patch.git
+	sha256sums = SKIP
+
+pkgname = system-patch-git

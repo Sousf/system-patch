@@ -1,0 +1,55 @@
+# Maintainer: Peter Bozzo <peter.bozzo.swe@gmail.com>
+
+pkgname=system-patch-git
+pkgver=r8.c29bd17
+pkgrel=1
+pkgdesc='TUI that shows every pending package update, why it was pushed, and whether to take it'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Sousf/system-patch'
+license=('MIT')
+depends=('glibc')
+makedepends=('go' 'git')
+optdepends=(
+  'pacman-contrib: repo updates via checkupdates'
+  'paru: AUR updates'
+  'arch-audit: Security Tracker CVEs'
+  'github-cli: raises the GitHub API rate limit to 5000/hour'
+  'claude-code: source analysis with the a key'
+)
+provides=('system-patch')
+conflicts=('system-patch')
+source=("$pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  mkdir -p build
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  export CGO_CPPFLAGS="${CPPFLAGS}"
+  export CGO_CFLAGS="${CFLAGS}"
+  export CGO_CXXFLAGS="${CXXFLAGS}"
+  export CGO_LDFLAGS="${LDFLAGS}"
+  export GOFLAGS='-buildmode=pie -trimpath -mod=readonly -modcacherw'
+  go build -ldflags "-linkmode external -extldflags ${LDFLAGS} -X main.version=${pkgver}" \
+    -o build/system-patch .
+}
+
+check() {
+  cd "$srcdir/$pkgname"
+  go test ./...
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -Dm755 build/system-patch "$pkgdir/usr/bin/system-patch"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
