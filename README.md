@@ -16,18 +16,32 @@ system-patch 47 updates · 5 flagged
   ● openssl                 │   327 security fixes
 ```
 
-system-patch scans for all package managers that exist on your machine, and present all package updates under each individual package manager in your terminal.
+system-patch finds every package manager on the machine and lists what each one
+has pending, one tab per manager.
 
-As a user, you can run analysis on individual package update. This sends an agent (claude) to the source of the update package (webpage, code repository...etc.) and give you a summary report of whether or not its worth upgrading. Agent can report on CVEs that the update aim to fix, patch notes, and even do an analysis of the actual code itself to tell you if the change is safe to install.
+`a` on a row sends an agent to the source of that update: the release page, the
+commit range, the PKGBUILD diff. It comes back with the CVEs the update closes,
+what the patch notes claim, a read of the diff itself, and a verdict on whether
+to install.
 
 ## Install
 
+On Arch:
+
 ```sh
-git clone https://github.com/Sousf/system-patch ~/dev/system-patch
-cd ~/dev/system-patch && ./install.sh
+paru -S system-patch
 ```
 
-Builds a static binary and links it into `~/.local/bin`. Go 1.24+
+Anywhere else, with Go 1.27+:
+
+```sh
+go install github.com/Sousf/system-patch@latest
+```
+
+Linux amd64 and arm64 binaries are attached to every release.
+
+From a checkout, `./install.sh` builds and symlinks into `~/.local/bin`, so
+`git pull && go build` updates the installed command with no reinstall step.
 
 ## Requirements
 
@@ -166,3 +180,7 @@ From the command line: `system-patch analyse system`.
 | a snap               | `sudo snap refresh <name>` | same                                                                              |
 | a repository package | the full upgrade           | see below                                                                         |
 | the system row       | the full upgrade           | every detected manager, in order                                                  |
+
+## License
+
+MIT. See [LICENSE](LICENSE).
