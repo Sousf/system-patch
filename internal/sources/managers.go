@@ -38,12 +38,23 @@ type Manager struct {
 	List func() []model.Update
 	// Note explains what it covers, and why it is not listed when List is nil.
 	Note string
+	// Origin is the single origin this manager reports, left empty when it
+	// reports more than one. Declared rather than inferred from what happens
+	// to be pending: an Arch machine with no AUR updates outstanding today
+	// still must not relabel its repository tab.
+	Origin model.Origin
 	// Verified records whether this entry has been exercised on a real machine.
 	// The unverified ones are written from each tool's documented output and
 	// parse defensively: a format that does not match yields no rows rather
 	// than wrong ones.
 	Verified bool
 }
+
+// Registry returns every manager this tool can drive, detected or not.
+//
+// Managers() answers "what is on this machine"; this answers "what does the
+// table claim", which is what a test asserting a property of the table needs.
+func Registry() []Manager { return registry }
 
 func has(cmd string) bool {
 	_, err := exec.LookPath(cmd)
@@ -118,6 +129,7 @@ var registry = []Manager{
 		Detect:   func() bool { return has("pacman") && !has("paru") && !has("yay") },
 		Upgrade:  []string{"sudo", "pacman", "-Syu"},
 		List:     RepoUpdates,
+		Origin:   model.Repo,
 		Note:     "repository packages only; no AUR helper installed",
 		Verified: true,
 	},
@@ -126,6 +138,7 @@ var registry = []Manager{
 		Detect:  func() bool { return has("apt-get") && fileExists("/etc/debian_version") },
 		Upgrade: []string{"sudo", "apt-get", "-y", "dist-upgrade"},
 		List:    aptUpdates,
+		Origin:  model.Repo,
 		Note:    "Debian and Ubuntu system packages",
 	},
 	{
@@ -133,6 +146,7 @@ var registry = []Manager{
 		Detect:  bin("dnf"),
 		Upgrade: []string{"sudo", "dnf", "-y", "upgrade"},
 		List:    dnfUpdates,
+		Origin:  model.Repo,
 		Note:    "Fedora and RHEL system packages",
 	},
 	{
@@ -178,6 +192,7 @@ var registry = []Manager{
 		Detect:   FlatpakAvailable,
 		Upgrade:  []string{"flatpak", "update"},
 		List:     FlatpakUpdates,
+		Origin:   model.Flatpak,
 		Note:     "flatpak apps and runtimes, from their own remotes",
 		Verified: true,
 	},
@@ -186,6 +201,7 @@ var registry = []Manager{
 		Detect:  bin("snap"),
 		Upgrade: []string{"sudo", "snap", "refresh"},
 		List:    snapUpdates,
+		Origin:  model.Origin("snap"),
 		Note:    "snap packages",
 	},
 
@@ -287,9 +303,16 @@ func ManagerUpdates() []model.Update {
 	}
 	wg.Wait()
 
+	// Stamped here because this is the last point that knows which manager
+	// produced which rows. The enumerators themselves cannot: RepoUpdates and
+	// AURUpdates are shared by the three pacman entries, so no List function
+	// knows the name of the registry entry that called it.
 	var all []model.Update
-	for _, r := range results {
-		all = append(all, r...)
+	for i, r := range results {
+		for _, u := range r {
+			u.Manager = ms[i].Name
+			all = append(all, u)
+		}
 	}
 	return all
 }

@@ -31,6 +31,17 @@ type Update struct {
 	Origin Origin `json:"origin"`
 	URL    string `json:"url"`
 
+	// Manager names the tool that reported this update, e.g. "apt" or
+	// "pacman + AUR". Display only.
+	//
+	// Kept separate from Origin, which is semantic and drives behaviour: which
+	// upgrade command is safe for one package, whether a system upgrade
+	// rebuilds it, whether the Security Tracker covers it. Several managers
+	// share one origin, so labelling the interface with Origin filed every apt
+	// package on Ubuntu under a tab called "repo", which is an Arch
+	// distinction that has no meaning there.
+	Manager string `json:"manager,omitempty"`
+
 	// From arch-audit. Repo packages only: the Arch Security Tracker has no
 	// notion of an AUR package, which is the blind spot this tool exists to
 	// cover.

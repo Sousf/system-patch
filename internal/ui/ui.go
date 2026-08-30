@@ -1185,6 +1185,58 @@ func (m Model) renderAgent() string {
 	return b.String()
 }
 
+// tabLabel names one tab: the reporting manager where that is unambiguous,
+// the origin otherwise.
+//
+// Origin is the wrong label on its own. Ubuntu files every apt package under
+// "repo", an Arch distinction between the official repositories and the AUR
+// that has no meaning where there is no AUR. The manager name is wrong on its
+// own too: one registry entry reports both halves of an Arch system, so
+// labelling by it would put "pacman + AUR" on two tabs and hide the split that
+// decides what a system upgrade rebuilds.
+//
+// So the manager name is used only when it maps cleanly onto this origin, and
+// the origin stands where it does not.
+// counts totals the pending updates and how many are flagged.
+//
+// The synthetic whole-system row is not a package and is excluded from both.
+// Counting it made the title read one higher than the tab bar, which totals
+// the same set without it: 16 updates above, 15 across the tabs.
+func counts(ups []model.Update) (pending, flagged int) {
+	for _, u := range ups {
+		if agent.IsSystem(u) {
+			continue
+		}
+		pending++
+		if u.Flagged() {
+			flagged++
+		}
+	}
+	return pending, flagged
+}
+
+// Read from the registry rather than from the pending rows. Inferring it from
+// what is pending made the label flip: an Arch machine with no AUR updates
+// outstanding showed one manager covering the only origin present, and its
+// repository tab renamed itself to "pacman + AUR" until an AUR package fell
+// behind.
+func tabLabel(ms []sources.Manager, o model.Origin) string {
+	name := ""
+	for _, m := range ms {
+		if m.Origin != o {
+			continue
+		}
+		if name != "" {
+			return string(o) // two managers feed this origin; neither names it
+		}
+		name = m.Name
+	}
+	if name == "" {
+		return string(o)
+	}
+	return name
+}
+
 // renderTabs is the manager tab bar: the combined view first, then one tab
 // per origin that actually has pending rows.
 func (m Model) renderTabs() string {
@@ -1207,9 +1259,10 @@ func (m Model) renderTabs() string {
 		counts[u.Origin]++
 		total++
 	}
+	ms := sources.Managers()
 	parts := []string{label(0, "all", total)}
 	for i, o := range m.tabOrigins {
-		parts = append(parts, label(i+1, string(o), counts[o]))
+		parts = append(parts, label(i+1, tabLabel(ms, o), counts[o]))
 	}
 	return strings.Join(parts, stDim.Render("·"))
 }
@@ -1219,14 +1272,9 @@ func (m Model) View() string {
 		return "starting…"
 	}
 
-	flagged := 0
-	for _, u := range m.updates {
-		if u.Flagged() {
-			flagged++
-		}
-	}
+	pending, flagged := counts(m.updates)
 	title := stTitle.Render("system-patch")
-	sub := stDim.Render(fmt.Sprintf(" %d updates", len(m.updates)))
+	sub := stDim.Render(fmt.Sprintf(" %d updates", pending))
 	if flagged > 0 {
 		sub += stRed.Render(fmt.Sprintf(" · %d flagged", flagged))
 	}
