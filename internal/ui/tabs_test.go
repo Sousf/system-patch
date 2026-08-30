@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Sousf/system-patch/internal/agent"
@@ -122,5 +123,48 @@ func TestRegistryOriginsDoNotCollideOnOneMachine(t *testing.T) {
 	// that adding a fourth is a deliberate act.
 	if got := len(seen[model.Repo]); got != 3 {
 		t.Errorf("managers declaring Repo = %v, want exactly apt, dnf, pacman", seen[model.Repo])
+	}
+}
+
+// Every reason Flagged() recognises must render a mark and a line. Two call
+// sites enumerated the set by hand and both had dropped a case, so a package
+// flagged only as suspected printed blank while count counted it.
+func TestEveryFlagReasonExplains(t *testing.T) {
+	cases := []struct {
+		name string
+		u    model.Update
+		want model.ReasonKind
+	}{
+		{"tracker", model.Update{CVEs: []string{"CVE-1"}, Severity: "High"}, model.ReasonTrackerCVE},
+		{"tracker unrated", model.Update{CVEs: []string{"CVE-1"}}, model.ReasonTrackerCVE},
+		{"upstream", model.Update{UpstreamCVEs: 3}, model.ReasonUpstreamCVE},
+		{"maintainer", model.Update{MaintainerWas: "a", Maintainer: "b"}, model.ReasonMaintainer},
+		{"suspected", model.Update{UpstreamKind: model.KindSuspected}, model.ReasonSuspected},
+		{"out of date", model.Update{OutOfDate: true}, model.ReasonOutOfDate},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.u.Reason(); got != c.want {
+				t.Fatalf("Reason() = %v, want %v", got, c.want)
+			}
+			if !c.u.Flagged() {
+				t.Error("Flagged() is false for a reason that has one")
+			}
+			if c.u.Explain() == "" {
+				t.Error("Explain() is empty for a flagged update")
+			}
+		})
+	}
+	var clean model.Update
+	if clean.Flagged() || clean.Reason() != model.ReasonNone || clean.Explain() != "" {
+		t.Error("an unflagged update reported a reason")
+	}
+}
+
+// An unrated advisory must not render as an empty severity.
+func TestUnratedSeverityHasWords(t *testing.T) {
+	u := model.Update{CVEs: []string{"CVE-1", "CVE-2"}}
+	if got := u.Explain(); !strings.Contains(got, "unrated") {
+		t.Errorf("Explain() = %q, want it to name the missing rating", got)
 	}
 }

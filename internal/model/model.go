@@ -5,6 +5,7 @@
 package model
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -78,11 +79,69 @@ type Update struct {
 
 // Flagged reports whether anything about this update warrants attention beyond
 // "a newer version exists".
-func (u Update) Flagged() bool {
-	return len(u.CVEs) > 0 || u.UpstreamCVEs > 0 ||
-		u.UpstreamKind == KindSuspected ||
-		u.MaintainerWas != "" || u.OutOfDate
+func (u Update) Flagged() bool { return u.Reason() != ReasonNone }
+
+// Why an update is flagged, in the order the reasons take precedence.
+type ReasonKind int
+
+const (
+	ReasonNone ReasonKind = iota
+	ReasonTrackerCVE
+	ReasonUpstreamCVE
+	ReasonMaintainer
+	ReasonSuspected
+	ReasonOutOfDate
+)
+
+// Reason names why this update is flagged, or ReasonNone.
+//
+// One source for a set that four places used to re-enumerate by hand, and two
+// had drifted: `list` printed a blank mark for a suspected-only package that
+// `count` counted, and the brief's flagged counter fired for five reasons
+// while its printer covered three, so a transaction flagged only by an
+// out-of-date package emitted a bare header with no rows under it.
+func (u Update) Reason() ReasonKind {
+	switch {
+	case len(u.CVEs) > 0:
+		return ReasonTrackerCVE
+	case u.UpstreamCVEs > 0:
+		return ReasonUpstreamCVE
+	case u.MaintainerWas != "":
+		return ReasonMaintainer
+	case u.UpstreamKind == KindSuspected:
+		return ReasonSuspected
+	case u.OutOfDate:
+		return ReasonOutOfDate
+	}
+	return ReasonNone
 }
+
+// Explain renders the reason as one plain-text line, empty when unflagged.
+func (u Update) Explain() string {
+	switch u.Reason() {
+	case ReasonTrackerCVE:
+		sev := u.Severity
+		if sev == "" {
+			sev = "unrated"
+		}
+		return fmt.Sprintf("%s, %d CVEs (tracker)", sev, len(u.CVEs))
+	case ReasonUpstreamCVE:
+		return fmt.Sprintf("%d CVEs (upstream)", u.UpstreamCVEs)
+	case ReasonMaintainer:
+		return "maintainer " + u.MaintainerWas + " -> " + u.Maintainer
+	case ReasonSuspected:
+		return "release notes read security-relevant, no CVE named"
+	case ReasonOutOfDate:
+		return "flagged out-of-date"
+	}
+	return ""
+}
+
+// Severities are the advisory ratings, most severe first. One list, because
+// two display loops and a rank map had drifted: both loops stopped at "Low",
+// so an unrated advisory was counted into a CVE total it could never appear
+// as a segment of.
+var Severities = []string{"Critical", "High", "Medium", "Low", "Unknown"}
 
 // Kind describes how much confidence the caller may place in a Notes value.
 type Kind string

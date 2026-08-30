@@ -328,10 +328,16 @@ func debDeps(name string) (Deps, bool) {
 	if !has("apt-cache") {
 		return Deps{}, false
 	}
+	// Only the narrow query runs. The bare fallback that used to follow it
+	// included Recommends, Suggests and Enhances, and every line was filed into
+	// RequiredBy — "packages that will not work without this one" — so a
+	// suggestion was handed to the agent as a hard dependency to reason about.
+	// Reporting unknown is the honest answer when the narrow form is rejected.
 	for _, args := range [][]string{
 		{"rdepends", "--installed", "--no-Recommends", "--no-Suggests",
 			"--no-Conflicts", "--no-Breaks", "--no-Replaces", "--no-Enhances", name},
-		{"rdepends", "--installed", name},
+		{"rdepends", "--installed", "--no-recommends", "--no-suggests",
+			"--no-conflicts", "--no-breaks", "--no-replaces", "--no-enhances", name},
 	} {
 		out := run(30*time.Second, "apt-cache", args...)
 		if strings.TrimSpace(out) == "" {

@@ -62,6 +62,21 @@ type HostInfo struct {
 	ForeignNote string
 	// ArchNews reports whether the Arch announcement feed applies here.
 	ArchNews bool
+	// KernelNames matches this family's kernel packages. A kernel update
+	// replaces the running kernel's modules on disk, which is the one delayed
+	// failure worth naming, and the package is called linux on Arch, kernel on
+	// Fedora and kernel-default on openSUSE.
+	KernelNames []string
+}
+
+// IsKernel reports whether a package name is one of this family's kernels.
+func (h HostInfo) IsKernel(name string) bool {
+	for _, k := range h.KernelNames {
+		if name == k || strings.HasPrefix(name, k+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // allManagerBins is every command known to install or upgrade software on any
@@ -209,6 +224,7 @@ func hostFrom(rel map[string]string, hasBin func(string) bool) HostInfo {
 
 	switch h.Family {
 	case Arch:
+		h.KernelNames = []string{"linux"}
 		h.DBNote = `  /var/lib/pacman/local/<name>-<version>/desc   installed packages
   /var/lib/pacman/sync/*.db                     repository metadata (tar)
 
@@ -222,6 +238,7 @@ pactree, uname and expac do work if you need them.`
 		h.ArchNews = true
 
 	case Debian:
+		h.KernelNames = []string{"linux-image", "linux-generic", "linux-headers"}
 		h.DBNote = `  /var/lib/dpkg/status                          installed packages and versions
   /var/lib/apt/lists/*Packages                  archive metadata
 
@@ -236,6 +253,7 @@ available. dpkg and apt are blocked, because both can also install.`
 			"upgraded in step with the distribution archive and are where version skew lands"
 
 	case Fedora:
+		h.KernelNames = []string{"kernel"}
 		h.DBNote = `  /var/lib/rpm                                  the rpm database
 
 rpmquery and repoquery are read-only and available to you: rpmquery -a,
@@ -249,6 +267,7 @@ available. rpm and dnf are blocked, because both can also install.`
 			"rebuilt in step with the distribution"
 
 	case SUSE:
+		h.KernelNames = []string{"kernel-default", "kernel"}
 		h.DBNote = `  /var/lib/rpm                                  the rpm database
 
 rpmquery is read-only and available to you: rpmquery -a, rpmquery --provides.
@@ -259,6 +278,7 @@ uname is available. rpm and zypper are blocked, because both can also install.`
 			"could not merge"
 
 	case Alpine:
+		h.KernelNames = []string{"linux-lts", "linux-virt"}
 		h.DBNote = `  /lib/apk/db/installed                         installed packages
 
 That file is plain text, one stanza per package: read it directly. uname is
@@ -268,6 +288,7 @@ available. apk is blocked, because it can also install.`
 		h.ConfigConvention = ".apk-new files left beside configs the upgrade could not replace"
 
 	case Void:
+		h.KernelNames = []string{"linux"}
 		h.DBNote = `  /var/db/xbps                                  installed packages
 
 xbps-query is read-only and works. uname is available.`
@@ -276,6 +297,7 @@ xbps-query is read-only and works. uname is available.`
 		h.ConfigConvention = ".new-<version> files left beside configs the upgrade could not replace"
 
 	case Gentoo:
+		h.KernelNames = []string{"gentoo-sources", "gentoo-kernel"}
 		h.DBNote = `  /var/db/pkg/<category>/<name>-<version>        installed packages
 
 equery and qlist are read-only and work if portage-utils is installed. uname

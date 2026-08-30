@@ -114,20 +114,14 @@ func cmdList() int {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
 	for _, u := range res.Updates {
-		mark, why := " ", ""
-		switch {
-		case len(u.CVEs) > 0:
+		mark, why := " ", u.Explain()
+		switch u.Reason() {
+		case model.ReasonTrackerCVE, model.ReasonUpstreamCVE:
 			mark = "!"
-			why = fmt.Sprintf("%s, %d CVEs (tracker)", u.Severity, len(u.CVEs))
-		case u.MaintainerWas != "":
+		case model.ReasonMaintainer:
 			mark = "^"
-			why = "maintainer " + u.MaintainerWas + " -> " + u.Maintainer
-		case u.UpstreamCVEs > 0:
-			mark = "!"
-			why = fmt.Sprintf("%d CVEs (upstream)", u.UpstreamCVEs)
-		case u.OutOfDate:
+		case model.ReasonSuspected, model.ReasonOutOfDate:
 			mark = "?"
-			why = "flagged out-of-date"
 		}
 		fmt.Printf("%s %-32s %-22s -> %-22s %-5s %s\n",
 			mark, u.Name, u.Cur, u.New, u.Origin, why)
@@ -273,7 +267,7 @@ func severityLine(r model.Release) string {
 		counts[s]++
 	}
 	var parts []string
-	for _, s := range []string{"Critical", "High", "Medium", "Low"} {
+	for _, s := range model.Severities {
 		if counts[s] > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", counts[s], s))
 		}

@@ -88,7 +88,11 @@ type Advisory struct {
 	Severity string
 }
 
-var sevRank = map[string]int{"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Unknown": 0}
+// Unknown outranks the empty string so an advisory with no severity is still
+// recorded as rated at all. It ranked 0, the same as absent, so the comparison
+// below never stored it and the field stayed empty — which then rendered as
+// "(severity )" in the brief and a dangling separator in the interface.
+var sevRank = map[string]int{"Critical": 5, "High": 4, "Medium": 3, "Low": 2, "Unknown": 1}
 
 // Advisories maps pkgname to its Security Tracker findings.
 //

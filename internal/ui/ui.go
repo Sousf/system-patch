@@ -871,7 +871,7 @@ func sevSummary(rels []model.Release, w int) string {
 		st   lipgloss.Style
 	}
 	segs := []seg{{fmt.Sprintf("%d CVEs", total), stBold}}
-	for _, s := range []string{"Critical", "High", "Medium", "Low"} {
+	for _, s := range model.Severities {
 		if counts[s] == 0 {
 			continue
 		}

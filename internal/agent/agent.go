@@ -535,17 +535,11 @@ func SystemPrompt(ups []model.Update) string {
 			continue
 		}
 		flagged++
-		switch {
-		case len(u.CVEs) > 0:
-			fmt.Fprintf(&b, "  %s — %s, %d CVEs (%s)\n",
-				u.Name, u.Severity, len(u.CVEs), trackerName(host))
-		case u.UpstreamCVEs > 0:
-			fmt.Fprintf(&b, "  %s — %d CVEs (vendor release notes)\n",
-				u.Name, u.UpstreamCVEs)
-		case u.MaintainerWas != "":
-			fmt.Fprintf(&b, "  %s — AUR maintainer changed: %s -> %s\n",
-				u.Name, u.MaintainerWas, u.Maintainer)
-		}
+		// Every reason prints. The counter used to fire for five and the
+		// switch cover three, so a transaction flagged only by an out-of-date
+		// or suspected package emitted this header with nothing under it and
+		// no "none" line either.
+		fmt.Fprintf(&b, "  %s — %s\n", u.Name, explainFor(u, host))
 	}
 	if flagged == 0 {
 		fmt.Fprintf(&b, "  none\n")
@@ -555,7 +549,7 @@ func SystemPrompt(ups []model.Update) string {
 	// confusing: modules for the running kernel are replaced on disk, so
 	// hotplugging hardware or loading a module fails until reboot.
 	for _, u := range repo {
-		if u.Name == "linux" || u.Name == "linux-lts" || strings.HasPrefix(u.Name, "linux-") {
+		if host.IsKernel(u.Name) {
 			fmt.Fprintf(&b, "\nKERNEL\n  %s %s -> %s (running kernel's modules are "+
 				"replaced on disk; reboot required)\n", u.Name, u.Cur, u.New)
 			break
@@ -665,6 +659,18 @@ warning that matters. Never describe a tool or a path you have not confirmed
 exists on this machine. Be concise.`)
 
 	return b.String()
+}
+
+// explainFor is the one-line reason, with the CVE source named for this host.
+func explainFor(u model.Update, h sources.HostInfo) string {
+	if u.Reason() == model.ReasonTrackerCVE {
+		sev := u.Severity
+		if sev == "" {
+			sev = "unrated"
+		}
+		return fmt.Sprintf("%s, %d CVEs (%s)", sev, len(u.CVEs), trackerName(h))
+	}
+	return u.Explain()
 }
 
 // trackerName names the advisory source behind a CVE list.
