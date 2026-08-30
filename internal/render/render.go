@@ -7,6 +7,7 @@
 package render
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -174,4 +175,36 @@ func Markdown(md string, w int) string {
 	out = strings.Trim(out, "\n")
 	lastIn, lastOut, lastWidth = md, out, w
 	return out
+}
+
+// Truncate shortens s to at most n columns, ending in an ellipsis when it cut.
+//
+// Rune-based, because a byte cut through a multi-byte character renders as a
+// replacement glyph. The floor matters: n below 4 leaves no room for the
+// ellipsis, and slicing to n-1 at n == 0 panics. Two copies of this existed
+// and only the interface's had the floor, so the other survived on having a
+// single caller that passed a constant.
+func Truncate(s string, n int) string {
+	if n < 4 {
+		n = 4
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "\u2026"
+}
+
+// CapList joins at most n items, counting the remainder, so a package carrying
+// 300 CVEs does not push everything else off the pane.
+//
+// The remainder count is part of the string before any truncation, not
+// appended after it, or the result overruns the width it was given. The slice
+// is never sorted in place: sources orders CVEs with the highest-severity
+// advisory's issues first, and that order is the information.
+func CapList(items []string, n int) string {
+	if len(items) <= n {
+		return strings.Join(items, ", ")
+	}
+	return fmt.Sprintf("%s \u2026 +%d more", strings.Join(items[:n], ", "), len(items)-n)
 }

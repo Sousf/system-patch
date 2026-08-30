@@ -48,6 +48,10 @@ var (
 	stMauve  = lipgloss.NewStyle().Foreground(cMauve)
 	stBold   = lipgloss.NewStyle().Bold(true)
 
+	stRedBold    = lipgloss.NewStyle().Bold(true).Foreground(cRed)
+	stYellowBold = lipgloss.NewStyle().Bold(true).Foreground(cYellow)
+	stGreenBold  = lipgloss.NewStyle().Bold(true).Foreground(cGreen)
+
 	stLeft = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, true, false, false).
 		BorderForeground(cDim).PaddingRight(1)
 )
@@ -97,9 +101,6 @@ type Model struct {
 	// Markdown accumulated from the agent's prose, kept separate from the
 	// activity trail so it can be rendered as one document.
 	agentText string
-	// Verdicts by package name, so the list can show what a previous
-	// analysis concluded without reopening it.
-	verdicts map[string]render.Verdict
 	// True when the pane is showing a stored analysis rather than a live run.
 	fromCache bool
 
@@ -260,13 +261,12 @@ func New() Model {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(cMauve)
 	m := Model{
-		notes:    map[string]model.Notes{},
-		loading:  map[string]bool{},
-		verdicts: map[string]render.Verdict{},
-		sp:       sp,
-		booting:  true,
-		w:        80,
-		h:        24,
+		notes:   map[string]model.Notes{},
+		loading: map[string]bool{},
+		sp:      sp,
+		booting: true,
+		w:       80,
+		h:       24,
 	}
 	m.layout()
 	return m
@@ -705,9 +705,6 @@ func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
 			for _, t := range s.Trail {
 				m.agentOut = append(m.agentOut, agent.Line{Kind: agent.Activity, Text: t})
 			}
-			if v, okv := render.FindVerdict(s.Text); okv {
-				m.verdicts[u.Name] = v
-			}
 			m.focusRight = true
 			m.refreshPane()
 			m.vp.GotoTop()
@@ -741,9 +738,6 @@ func (m *Model) saveAnalysis() {
 		return
 	}
 	s := agent.Stored{Text: m.agentText}
-	if v, okv := render.FindVerdict(m.agentText); okv {
-		m.verdicts[u.Name] = v
-	}
 	for _, l := range m.agentOut {
 		if l.Kind == agent.Activity {
 			s.Trail = append(s.Trail, l.Text)
@@ -973,10 +967,7 @@ func (m Model) renderNotes() string {
 	b.WriteString("\n")
 
 	if len(n.Releases) == 0 {
-		msg := n.Err
-		if msg == "" {
-			msg = "upstream publishes no release notes"
-		}
+		msg := n.Reason()
 		// Stated plainly rather than left blank. "No signal exists" and "all
 		// clear" are different answers, and only one of them is honest here.
 		fmt.Fprintf(&b, "%s\n", stDim.Render(msg))
@@ -1010,14 +1001,12 @@ func (m Model) renderNotes() string {
 
 // verdictBanner is the headline answer, styled by how much it demands.
 func verdictBanner(v render.Verdict, w int) string {
-	st := stGreen
+	st := stGreenBold
 	switch render.Urgency(v) {
 	case 2:
-		st = lipgloss.NewStyle().Bold(true).Foreground(cRed)
+		st = stRedBold
 	case 1:
-		st = lipgloss.NewStyle().Bold(true).Foreground(cYellow)
-	default:
-		st = lipgloss.NewStyle().Bold(true).Foreground(cGreen)
+		st = stYellowBold
 	}
 	label := "  " + string(v) + "  "
 	if len(label) > w {
@@ -1202,18 +1191,6 @@ func (m Model) renderAgent() string {
 	return b.String()
 }
 
-// tabLabel names one tab: the reporting manager where that is unambiguous,
-// the origin otherwise.
-//
-// Origin is the wrong label on its own. Ubuntu files every apt package under
-// "repo", an Arch distinction between the official repositories and the AUR
-// that has no meaning where there is no AUR. The manager name is wrong on its
-// own too: one registry entry reports both halves of an Arch system, so
-// labelling by it would put "pacman + AUR" on two tabs and hide the split that
-// decides what a system upgrade rebuilds.
-//
-// So the manager name is used only when it maps cleanly onto this origin, and
-// the origin stands where it does not.
 // counts totals the pending updates and how many are flagged.
 //
 // The synthetic whole-system row is not a package and is excluded from both.
@@ -1232,6 +1209,16 @@ func counts(ups []model.Update) (pending, flagged int) {
 	return pending, flagged
 }
 
+// tabLabel names one tab: the reporting manager where that is unambiguous, the
+// origin otherwise.
+//
+// Origin is the wrong label on its own. Ubuntu files every apt package under
+// "repo", an Arch distinction between the official repositories and the AUR
+// that has no meaning where there is no AUR. The manager name is wrong on its
+// own too: one registry entry reports both halves of an Arch system, so
+// labelling by it would put "pacman + AUR" on two tabs and hide the split that
+// decides what a system upgrade rebuilds.
+//
 // Read from the registry rather than from the pending rows. Inferring it from
 // what is pending made the label flip: an Arch machine with no AUR updates
 // outstanding showed one manager covering the only origin present, and its
@@ -1267,19 +1254,19 @@ func (m Model) renderTabs() string {
 		}
 		return stDim.Render(t)
 	}
-	counts := map[model.Origin]int{}
+	perOrigin := map[model.Origin]int{}
 	total := 0
 	for _, u := range m.updates {
 		if agent.IsSystem(u) {
 			continue
 		}
-		counts[u.Origin]++
+		perOrigin[u.Origin]++
 		total++
 	}
 	ms := sources.Managers()
 	parts := []string{label(0, "all", total)}
 	for i, o := range m.tabOrigins {
-		parts = append(parts, label(i+1, tabLabel(ms, o), counts[o]))
+		parts = append(parts, label(i+1, tabLabel(ms, o), perOrigin[o]))
 	}
 	return strings.Join(parts, stDim.Render("·"))
 }
@@ -1334,17 +1321,6 @@ func (m Model) View() string {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-func truncate(s string, w int) string {
-	if w < 4 {
-		w = 4
-	}
-	r := []rune(s)
-	if len(r) <= w {
-		return s
-	}
-	return string(r[:w-1]) + "…"
-}
-
 // wrapJoin renders at most n items followed by a count of the remainder, so a
 // package carrying 300 CVEs does not push everything else off the pane.
 //
@@ -1353,12 +1329,7 @@ func truncate(s string, w int) string {
 // sorted in place: sources orders CVEs with the highest-severity advisory's
 // first, and a render pass has no business rearranging that.
 func wrapJoin(items []string, n, w int) string {
-	if len(items) <= n {
-		return truncate(strings.Join(items, ", "), w)
-	}
-	s := fmt.Sprintf("%s … +%d more",
-		strings.Join(items[:n], ", "), len(items)-n)
-	return truncate(s, w)
+	return truncate(render.CapList(items, n), w)
 }
 
 // Run starts the program.
@@ -1367,3 +1338,7 @@ func Run() error {
 	_, err := p.Run()
 	return err
 }
+
+// truncate and wrapJoin delegate to render, which owns the shared text
+// helpers. Kept as local names so the call sites read the same.
+func truncate(s string, n int) string { return render.Truncate(s, n) }

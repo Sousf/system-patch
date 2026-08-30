@@ -184,8 +184,36 @@ type Notes struct {
 	Err string `json:"err,omitempty"`
 }
 
+// Reason explains an empty Releases slice in one line.
+//
+// The distinction it encodes is load-bearing: a non-empty Err means the source
+// was unreachable, an empty one means upstream publishes nothing. Both files
+// that rendered it carried the same four lines and the same string literal.
+func (n Notes) Reason() string {
+	if n.Err != "" {
+		return n.Err
+	}
+	return "upstream publishes no release notes"
+}
+
 var tagRe = regexp.MustCompile(`^(\d+(?:\.\d+)*)`)
 var pkgrelRe = regexp.MustCompile(`-\d+$`)
+
+// UpstreamVersion strips the distribution's packaging from a version: a pacman
+// epoch ("1:"), a pkgrel ("-2") and a tag's leading "v".
+//
+// Exported because adapters needs the same transformation to build a forge tag,
+// and had its own copy of the regexp and the epoch cut. The copy dropped the
+// guard below, which keeps a hyphen before the colon from being read as an
+// epoch marker.
+func UpstreamVersion(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, ":"); i >= 0 && !strings.Contains(s[:i], "-") {
+		s = s[i+1:]
+	}
+	s = pkgrelRe.ReplaceAllString(s, "")
+	return strings.TrimLeft(s, "vV")
+}
 
 // VParts reduces a version string to a comparable sequence of integers.
 //
@@ -194,13 +222,7 @@ var pkgrelRe = regexp.MustCompile(`-\d+$`)
 // which releases fall between installed and available, and an unparseable tag
 // scheme should drop that one entry rather than abort the whole lookup.
 func VParts(s string) []int {
-	s = strings.TrimSpace(s)
-	if i := strings.Index(s, ":"); i >= 0 && i < len(s) && !strings.Contains(s[:i], "-") {
-		s = s[i+1:]
-	}
-	s = pkgrelRe.ReplaceAllString(s, "")
-	s = strings.TrimLeft(s, "vV")
-	m := tagRe.FindStringSubmatch(s)
+	m := tagRe.FindStringSubmatch(UpstreamVersion(s))
 	if m == nil {
 		return nil
 	}

@@ -277,13 +277,7 @@ func severityLine(r model.Release) string {
 
 // capList keeps a long identifier list readable. A single Chrome release can
 // name several hundred CVEs, and printing all of them buries every other line.
-func capList(items []string, n int) string {
-	if len(items) <= n {
-		return strings.Join(items, ", ")
-	}
-	return fmt.Sprintf("%s … +%d more",
-		strings.Join(items[:n], ", "), len(items)-n)
-}
+func capList(items []string, n int) string { return render.CapList(items, n) }
 
 func cmdJSON() int {
 	res := sources.Load(cacheTTL)
@@ -338,10 +332,7 @@ func cmdNotes(name string) int {
 	fmt.Println()
 
 	if len(n.Releases) == 0 {
-		msg := n.Err
-		if msg == "" {
-			msg = "upstream publishes no release notes"
-		}
+		msg := n.Reason()
 		fmt.Println(msg)
 		return 0
 	}

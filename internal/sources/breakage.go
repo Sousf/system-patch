@@ -62,11 +62,6 @@ func parseInfo(out string) map[string]Deps {
 	return res
 }
 
-// InstalledDeps reads the local database for one installed package.
-func InstalledDeps(name string) Deps {
-	return parseInfo(run(30*time.Second, "pacman", "-Qi", name))[name]
-}
-
 // CandidateProvides is what the incoming version will export.
 //
 // Only meaningful for repo packages: an AUR package has not been built yet, so
@@ -163,7 +158,8 @@ func (n NewsItem) RequiresIntervention() bool {
 
 const newsFeed = "https://archlinux.org/feeds/news/"
 
-var tagRe = strings.NewReplacer("\n", " ", "\t", " ")
+// flattenWS collapses the newlines and tabs the feed embeds in a description.
+var flattenWS = strings.NewReplacer("\n", " ", "\t", " ")
 
 // News fetches recent Arch announcements, most recent first.
 //
@@ -255,7 +251,7 @@ func fetchNewsFeed() []NewsItem {
 			Title:   strings.TrimSpace(it.Title),
 			Date:    strings.TrimSpace(it.Date),
 			Link:    strings.TrimSpace(it.Link),
-			Summary: strings.TrimSpace(tagRe.Replace(stripTags(it.Desc))),
+			Summary: strings.TrimSpace(flattenWS.Replace(stripTags(it.Desc))),
 		})
 	}
 	return items

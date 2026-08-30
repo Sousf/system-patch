@@ -329,8 +329,6 @@ func Enrich(ups []model.Update) {
 	wg.Wait()
 }
 
-var pkgrelRe = regexp.MustCompile(`-\d+$`)
-
 // gitTag converts a pacman version into the tag upstream probably used.
 //
 // A pacman version is not a git ref. "1.23.1-4" carries an Arch pkgrel that no
@@ -342,15 +340,13 @@ var pkgrelRe = regexp.MustCompile(`-\d+$`)
 // The prefix is copied from a tag actually seen in this project's releases
 // rather than guessed, falling back to a bare version when none were fetched.
 func gitTag(v string, n model.Notes) string {
-	if i := strings.Index(v, ":"); i >= 0 {
-		v = v[i+1:] // epoch
-	}
-	v = pkgrelRe.ReplaceAllString(v, "")
-	for _, r := range n.Releases {
-		if strings.HasPrefix(r.Version, "v") {
-			return "v" + v
-		}
-		break
+	v = model.UpstreamVersion(v)
+	// The newest release decides, since a project's tag convention is
+	// consistent and that is the tag most likely to still exist. Written as a
+	// loop with an unconditional break, it read as a scan for any v-prefixed
+	// tag, which it never was.
+	if len(n.Releases) > 0 && strings.HasPrefix(n.Releases[0].Version, "v") {
+		return "v" + v
 	}
 	return v
 }

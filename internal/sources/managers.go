@@ -25,6 +25,11 @@ import (
 // Truly open-ended discovery is not possible — you cannot infer how to safely
 // update a tool you have never heard of — so the honest design is a wide table
 // plus an explicit account of what is left over (see Unmanaged).
+//
+// Only pacman, flatpak, vim.pack and oh-my-zsh have been exercised on a real
+// machine. The rest are written from each tool's documented output and parse
+// defensively, so a format that does not match yields no rows rather than
+// wrong ones.
 type Manager struct {
 	// Name as shown to the user.
 	Name string
@@ -43,11 +48,6 @@ type Manager struct {
 	// to be pending: an Arch machine with no AUR updates outstanding today
 	// still must not relabel its repository tab.
 	Origin model.Origin
-	// Verified records whether this entry has been exercised on a real machine.
-	// The unverified ones are written from each tool's documented output and
-	// parse defensively: a format that does not match yields no rows rather
-	// than wrong ones.
-	Verified bool
 }
 
 // Registry returns every manager this tool can drive, detected or not.
@@ -127,29 +127,26 @@ func repoAndAUR() []model.Update {
 var registry = []Manager{
 	// ── system package managers ──────────────────────────────────────────
 	{
-		Name:     "pacman + AUR",
-		Detect:   bin("paru"),
-		Upgrade:  []string{"paru", "-Syu"},
-		List:     repoAndAUR,
-		Note:     "repository and AUR packages, in one transaction",
-		Verified: true,
+		Name:    "pacman + AUR",
+		Detect:  bin("paru"),
+		Upgrade: []string{"paru", "-Syu"},
+		List:    repoAndAUR,
+		Note:    "repository and AUR packages, in one transaction",
 	},
 	{
-		Name:     "pacman + AUR",
-		Detect:   func() bool { return !has("paru") && has("yay") },
-		Upgrade:  []string{"yay", "-Syu"},
-		List:     repoAndAUR,
-		Note:     "repository and AUR packages, in one transaction",
-		Verified: false,
+		Name:    "pacman + AUR",
+		Detect:  func() bool { return !has("paru") && has("yay") },
+		Upgrade: []string{"yay", "-Syu"},
+		List:    repoAndAUR,
+		Note:    "repository and AUR packages, in one transaction",
 	},
 	{
-		Name:     "pacman",
-		Detect:   func() bool { return has("pacman") && !has("paru") && !has("yay") },
-		Upgrade:  []string{"sudo", "pacman", "-Syu"},
-		List:     RepoUpdates,
-		Origin:   model.Repo,
-		Note:     "repository packages only; no AUR helper installed",
-		Verified: true,
+		Name:    "pacman",
+		Detect:  func() bool { return has("pacman") && !has("paru") && !has("yay") },
+		Upgrade: []string{"sudo", "pacman", "-Syu"},
+		List:    RepoUpdates,
+		Origin:  model.Repo,
+		Note:    "repository packages only; no AUR helper installed",
 	},
 	{
 		Name:    "apt",
@@ -206,13 +203,12 @@ var registry = []Manager{
 
 	// ── cross-distro application managers ────────────────────────────────
 	{
-		Name:     "flatpak",
-		Detect:   FlatpakAvailable,
-		Upgrade:  []string{"flatpak", "update"},
-		List:     FlatpakUpdates,
-		Origin:   model.Flatpak,
-		Note:     "flatpak apps and runtimes, from their own remotes",
-		Verified: true,
+		Name:    "flatpak",
+		Detect:  FlatpakAvailable,
+		Upgrade: []string{"flatpak", "update"},
+		List:    FlatpakUpdates,
+		Origin:  model.Flatpak,
+		Note:    "flatpak apps and runtimes, from their own remotes",
 	},
 	{
 		Name:    "snap",
@@ -262,7 +258,6 @@ var registry = []Manager{
 			"+lua vim.pack.update(nil, {force=true})", "+qa"},
 		Note: "editor plugins; not listed because checking for pending updates " +
 			"means a git fetch per plugin",
-		Verified: true,
 	},
 	{
 		Name: "neovim (lazy.nvim)",
@@ -273,11 +268,10 @@ var registry = []Manager{
 		Note:    "editor plugins managed by lazy.nvim",
 	},
 	{
-		Name:     "oh-my-zsh",
-		Detect:   func() bool { return fileExists(home(".oh-my-zsh", "tools", "upgrade.sh")) },
-		Upgrade:  []string{home(".oh-my-zsh", "tools", "upgrade.sh")},
-		Note:     "shell framework and its plugins; the script is non-interactive by default",
-		Verified: true,
+		Name:    "oh-my-zsh",
+		Detect:  func() bool { return fileExists(home(".oh-my-zsh", "tools", "upgrade.sh")) },
+		Upgrade: []string{home(".oh-my-zsh", "tools", "upgrade.sh")},
+		Note:    "shell framework and its plugins; the script is non-interactive by default",
 	},
 }
 

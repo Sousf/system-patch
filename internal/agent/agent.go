@@ -22,6 +22,7 @@ import (
 	"github.com/Sousf/system-patch/internal/adapters"
 	"github.com/Sousf/system-patch/internal/cache"
 	"github.com/Sousf/system-patch/internal/model"
+	"github.com/Sousf/system-patch/internal/render"
 	"github.com/Sousf/system-patch/internal/sources"
 )
 
@@ -738,13 +739,7 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "\u2026"
-}
+func truncate(s string, n int) string { return render.Truncate(s, n) }
 
 // Brief picks the right prompt for an update.
 //
@@ -790,7 +785,6 @@ type event struct {
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 	} `json:"message"`
-	Subtype  string  `json:"subtype"`
 	IsError  bool    `json:"is_error"`
 	Result   string  `json:"result"`
 	CostUSD  float64 `json:"total_cost_usd"`
