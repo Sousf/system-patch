@@ -36,8 +36,10 @@ func TestTabLabelKeepsOriginWhenAManagerSpansTwo(t *testing.T) {
 		{Name: "pacman + AUR"}, // no Origin declared
 		{Name: "flatpak", Origin: model.Flatpak},
 	}
-	if got := tabLabel(ms, model.Repo); got != "repo" {
-		t.Errorf("repo tab = %q, want %q", got, "repo")
+	// Not "pacman + AUR" on either tab: that would print one name twice and
+	// hide the split deciding what an upgrade rebuilds.
+	if got := tabLabel(ms, model.Repo); got == "pacman + AUR" {
+		t.Error("repository tab took the name of a manager spanning two origins")
 	}
 	if got := tabLabel(ms, model.AUR); got != "aur" {
 		t.Errorf("aur tab = %q, want %q", got, "aur")
@@ -52,8 +54,8 @@ func TestTabLabelKeepsOriginWhenAManagerSpansTwo(t *testing.T) {
 // twenty, because the registry decides and the pending set does not.
 func TestTabLabelIgnoresWhatIsPending(t *testing.T) {
 	ms := []sources.Manager{{Name: "pacman + AUR"}}
-	if got := tabLabel(ms, model.Repo); got != "repo" {
-		t.Errorf("repo tab = %q, want %q", got, "repo")
+	if got := tabLabel(ms, model.Repo); got == "pacman + AUR" {
+		t.Error("label taken from a manager that reports two origins")
 	}
 }
 
@@ -63,19 +65,27 @@ func TestTabLabelFallsBackWhenManagersCollide(t *testing.T) {
 		{Name: "apt", Origin: model.Repo},
 		{Name: "dnf", Origin: model.Repo},
 	}
-	if got := tabLabel(ms, model.Repo); got != "repo" {
-		t.Errorf("repo tab = %q, want %q", got, "repo")
+	if got := tabLabel(ms, model.Repo); got == "apt" || got == "dnf" {
+		t.Errorf("repo tab = %q, but two managers claim that origin", got)
 	}
 }
 
-// An origin no registry entry claims still has to render.
+// An origin no registry entry claims still has to render, and repository
+// packages fall back to the family's manager rather than to the word "repo".
 func TestTabLabelFallsBackWhenUnclaimed(t *testing.T) {
-	if got := tabLabel(nil, model.Repo); got != "repo" {
-		t.Errorf("repo tab = %q, want %q", got, "repo")
+	want := sources.Host().RepoManager
+	if want == "" {
+		want = "repo" // a family this tool does not know
+	}
+	if got := tabLabel(nil, model.Repo); got != want {
+		t.Errorf("repo tab = %q, want %q", got, want)
 	}
 	ms := []sources.Manager{{Name: "flatpak", Origin: model.Flatpak}}
 	if got := tabLabel(ms, model.AUR); got != "aur" {
 		t.Errorf("aur tab = %q, want %q", got, "aur")
+	}
+	if got := tabLabel(ms, model.Snap); got != "snap" {
+		t.Errorf("snap tab = %q, want %q", got, "snap")
 	}
 }
 
@@ -183,14 +193,14 @@ func TestViewportHeightLeavesRoomForChrome(t *testing.T) {
 		mode    pane
 		want    int // viewport height
 	}{
-		{"no tabs, no pin", []model.Origin{model.Repo}, "", paneNotes, h - 3},
-		{"tabs, no pin", []model.Origin{model.Repo, model.AUR}, "", paneNotes, h - 4},
-		{"no tabs, routine pin", []model.Origin{model.Repo},
-			"## VERDICT: ROUTINE\n", paneAgent, h - 4},
-		{"no tabs, urgent pin", []model.Origin{model.Repo},
-			"## VERDICT: INSTALL NOW\n", paneAgent, h - 5},
-		{"tabs and urgent pin", []model.Origin{model.Repo, model.Flatpak},
+		{"one origin, no pin", []model.Origin{model.Repo}, "", paneNotes, h - 4},
+		{"two origins, no pin", []model.Origin{model.Repo, model.AUR}, "", paneNotes, h - 4},
+		{"routine pin", []model.Origin{model.Repo},
+			"## VERDICT: ROUTINE\n", paneAgent, h - 5},
+		{"urgent pin", []model.Origin{model.Repo},
 			"## VERDICT: INSTALL NOW\n", paneAgent, h - 6},
+		{"no origins yet, urgent pin", nil,
+			"## VERDICT: INSTALL NOW\n", paneAgent, h - 5},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -209,16 +219,37 @@ func TestViewportHeightLeavesRoomForChrome(t *testing.T) {
 	}
 }
 
-// One origin is not a choice, so the bar showing it is a wasted line.
-func TestTabBarHiddenWithNothingToSwitch(t *testing.T) {
+// The bar labels as much as it filters, so it is drawn whenever anything is
+// pending. Hiding it on a single-origin machine left nothing on screen saying
+// which manager the packages belonged to.
+func TestTabBarLabelsEvenWithOneOrigin(t *testing.T) {
 	m := Model{updates: []model.Update{{Name: "a", Origin: model.Repo}}}
 	m.tabOrigins = []model.Origin{model.Repo}
-	if got := m.renderTabs(); got != "" {
-		t.Errorf("tab bar rendered for a single origin: %q", got)
+	if got := m.renderTabs(); got == "" {
+		t.Error("tab bar hidden with one origin pending, so nothing names the manager")
 	}
-	m.tabOrigins = []model.Origin{model.Repo, model.AUR}
-	if m.renderTabs() == "" {
-		t.Error("tab bar hidden when two origins are pending")
+	m.tabOrigins = nil
+	if got := m.renderTabs(); got != "" {
+		t.Errorf("tab bar drawn with nothing pending: %q", got)
+	}
+}
+
+// Repository packages are named after the manager that owns them, since the
+// Arch registry entry reports repository and AUR packages together and cannot
+// lend its name to either tab.
+func TestRepoTabTakesTheFamilyManagerName(t *testing.T) {
+	archish := []sources.Manager{{Name: "pacman + AUR"}, {Name: "flatpak", Origin: model.Flatpak}}
+	got := tabLabel(archish, model.Repo)
+	if got == "repo" {
+		t.Error("repository tab still labelled \"repo\" instead of its manager")
+	}
+	t.Logf("repository tab on this host: %q", got)
+	if l := tabLabel(archish, model.AUR); l != "aur" {
+		t.Errorf("AUR tab = %q, want \"aur\"", l)
+	}
+	// A manager that owns exactly one origin still names its own tab.
+	if l := tabLabel([]sources.Manager{{Name: "apt", Origin: model.Repo}}, model.Repo); l != "apt" {
+		t.Errorf("apt tab = %q, want \"apt\"", l)
 	}
 }
 

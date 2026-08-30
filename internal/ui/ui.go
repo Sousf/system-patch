@@ -390,8 +390,8 @@ func (m *Model) layout() {
 	}
 }
 
-// hasTabs reports whether the tab bar has anything to switch between.
-func (m Model) hasTabs() bool { return len(m.tabOrigins) >= 2 }
+// hasTabs reports whether the tab bar is drawn.
+func (m Model) hasTabs() bool { return len(m.tabOrigins) > 0 }
 
 // pinHeight is how many lines the pinned verdict occupies.
 //
@@ -1275,24 +1275,36 @@ func tabLabel(ms []sources.Manager, o model.Origin) string {
 			continue
 		}
 		if name != "" {
-			return string(o) // two managers feed this origin; neither names it
+			return originName(o) // two managers feed it; neither names it
 		}
 		name = m.Name
 	}
 	if name == "" {
-		return string(o)
+		return originName(o)
 	}
 	return name
+}
+
+// originName is the fallback label when no single registry entry claims an
+// origin.
+//
+// Repository packages take the family's manager: pacman here, apt on Debian.
+// The Arch entry reports repository and AUR packages together, so it cannot
+// lend its name to either tab, and "repo" told an Arch user nothing they did
+// not already know while telling an Ubuntu user something untrue.
+func originName(o model.Origin) string {
+	if o == model.Repo {
+		if n := sources.Host().RepoManager; n != "" {
+			return n
+		}
+	}
+	return string(o)
 }
 
 // renderTabs is the manager tab bar: the combined view first, then one tab
 // per origin that actually has pending rows.
 func (m Model) renderTabs() string {
-	// One origin is not a choice. The bar then read "all 7 · repo 7", two tabs
-	// over the same seven packages differing only in whether the synthetic
-	// whole-system row is listed, which is not what a filter is for. It earns
-	// the line the moment a second origin has something pending.
-	if len(m.tabOrigins) < 2 {
+	if len(m.tabOrigins) == 0 {
 		return ""
 	}
 	label := func(i int, text string, n int) string {
@@ -1345,10 +1357,7 @@ func (m Model) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
-	keys := "↑↓ move · a analyse · i install · r reload · R rescan · q quit"
-	if m.hasTabs() {
-		keys = "↑↓ move · ←→ manager · a analyse · i install · r reload · R rescan · q quit"
-	}
+	keys := "↑↓ move · ←→ manager · a analyse · i install · r reload · R rescan · q quit"
 	if m.mode == paneAgent && m.agentRunning {
 		keys = "x cancel · tab scroll · esc back · q quit"
 	} else if m.focusRight {

@@ -62,6 +62,11 @@ type HostInfo struct {
 	ForeignNote string
 	// ArchNews reports whether the Arch announcement feed applies here.
 	ArchNews bool
+	// RepoManager is the command that owns this family's repository packages:
+	// pacman, apt, dnf. Names the origin where no single registry entry can,
+	// because the Arch entry reports repository and AUR packages together and
+	// so cannot lend its name to either.
+	RepoManager string
 	// KernelNames matches this family's kernel packages. A kernel update
 	// replaces the running kernel's modules on disk, which is the one delayed
 	// failure worth naming, and the package is called linux on Arch, kernel on
@@ -224,6 +229,7 @@ func hostFrom(rel map[string]string, hasBin func(string) bool) HostInfo {
 
 	switch h.Family {
 	case Arch:
+		h.RepoManager = "pacman"
 		h.KernelNames = []string{"linux"}
 		h.DBNote = `  /var/lib/pacman/local/<name>-<version>/desc   installed packages
   /var/lib/pacman/sync/*.db                     repository metadata (tar)
@@ -238,6 +244,7 @@ pactree, uname and expac do work if you need them.`
 		h.ArchNews = true
 
 	case Debian:
+		h.RepoManager = "apt"
 		h.KernelNames = []string{"linux-image", "linux-generic", "linux-headers"}
 		h.DBNote = `  /var/lib/dpkg/status                          installed packages and versions
   /var/lib/apt/lists/*Packages                  archive metadata
@@ -253,6 +260,7 @@ available. dpkg and apt are blocked, because both can also install.`
 			"upgraded in step with the distribution archive and are where version skew lands"
 
 	case Fedora:
+		h.RepoManager = "dnf"
 		h.KernelNames = []string{"kernel"}
 		h.DBNote = `  /var/lib/rpm                                  the rpm database
 
@@ -267,6 +275,7 @@ available. rpm and dnf are blocked, because both can also install.`
 			"rebuilt in step with the distribution"
 
 	case SUSE:
+		h.RepoManager = "zypper"
 		h.KernelNames = []string{"kernel-default", "kernel"}
 		h.DBNote = `  /var/lib/rpm                                  the rpm database
 
@@ -278,6 +287,7 @@ uname is available. rpm and zypper are blocked, because both can also install.`
 			"could not merge"
 
 	case Alpine:
+		h.RepoManager = "apk"
 		h.KernelNames = []string{"linux-lts", "linux-virt"}
 		h.DBNote = `  /lib/apk/db/installed                         installed packages
 
@@ -288,6 +298,7 @@ available. apk is blocked, because it can also install.`
 		h.ConfigConvention = ".apk-new files left beside configs the upgrade could not replace"
 
 	case Void:
+		h.RepoManager = "xbps"
 		h.KernelNames = []string{"linux"}
 		h.DBNote = `  /var/db/xbps                                  installed packages
 
@@ -297,6 +308,7 @@ xbps-query is read-only and works. uname is available.`
 		h.ConfigConvention = ".new-<version> files left beside configs the upgrade could not replace"
 
 	case Gentoo:
+		h.RepoManager = "portage"
 		h.KernelNames = []string{"gentoo-sources", "gentoo-kernel"}
 		h.DBNote = `  /var/db/pkg/<category>/<name>-<version>        installed packages
 
