@@ -792,7 +792,11 @@ func (m Model) renderList(w int) string {
 		// message wraps into the row grid below it.
 		return m.sp.View() + stDim.Render(" scanning…")
 	}
-	if len(m.updates) == 0 {
+	// Counted rather than testing the slice for emptiness: m.updates always
+	// holds the synthetic whole-system row, so the length is never zero and
+	// this message was unreachable. A machine with nothing pending showed a
+	// bare system row and no word that it was up to date.
+	if pending, _ := counts(m.updates); pending == 0 {
 		return stGreen.Render("✓ everything is up to date")
 	}
 
