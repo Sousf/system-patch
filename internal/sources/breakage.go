@@ -263,16 +263,32 @@ func (b Breakage) Known() bool { return b.Source != "" }
 // upgrade that would break — a different, and largely already-answered,
 // question.
 func Assess(u model.Update) Breakage {
+	// Only the system package manager's own rows are in its database. A
+	// flatpak ref or a snap is not, so querying pacman for one returns nothing
+	// and that nothing means "wrong database", not "nothing depends on it".
+	// Reported as fact it became exactly the fabrication this type guards
+	// against, on the maintainer's own machine, for every flatpak row.
+	if !u.Origin.System() {
+		return Breakage{}
+	}
+
 	switch Host().Family {
 	case Arch:
-		b := Breakage{Deps: InstalledDeps(u.Name), Source: "pacman"}
+		deps, ok := archDeps(u.Name)
+		if !ok {
+			return Breakage{}
+		}
+		b := Breakage{Deps: deps, Source: "pacman"}
 		if u.Origin == model.Repo {
 			b.Sonames = SonameChanges(b.Deps.Provides, CandidateProvides(u.Name))
 		}
-		foreign := Foreign()
-		for _, r := range append(append([]string{}, b.Deps.RequiredBy...), b.Deps.OptionalFor...) {
-			if foreign[r] {
-				b.AtRiskBy = append(b.AtRiskBy, r)
+		// Only worth the extra process when there is something to classify.
+		if len(b.Deps.RequiredBy) > 0 || len(b.Deps.OptionalFor) > 0 {
+			foreign := Foreign()
+			for _, r := range append(append([]string{}, b.Deps.RequiredBy...), b.Deps.OptionalFor...) {
+				if foreign[r] {
+					b.AtRiskBy = append(b.AtRiskBy, r)
+				}
 			}
 		}
 		return b
@@ -282,6 +298,19 @@ func Assess(u model.Update) Breakage {
 		}
 	}
 	return Breakage{}
+}
+
+// archDeps reads one package's entry, reporting whether pacman knew it at all.
+//
+// ok distinguishes "queried, and nothing depends on it" from "the query
+// returned nothing", which read the same way before and must not.
+func archDeps(name string) (Deps, bool) {
+	out := run(30*time.Second, "pacman", "-Qi", name)
+	if strings.TrimSpace(out) == "" {
+		return Deps{}, false
+	}
+	d, ok := parseInfo(out)[name]
+	return d, ok
 }
 
 // debDeps reads reverse dependencies from the apt cache.

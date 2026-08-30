@@ -64,6 +64,23 @@ type HostInfo struct {
 	ArchNews bool
 }
 
+// allManagerBins is every command known to install or upgrade software on any
+// supported system. Whichever of these exist here are denied to the agent,
+// independent of the detected family.
+//
+// Deliberately wider than the registry in managers.go: that table lists what
+// this tool can drive, and this one lists what an analysis must not be able to
+// run. A manager too obscure to drive can still install a package.
+var allManagerBins = []string{
+	"pacman", "paru", "yay", "pikaur", "makepkg", "pacman-key",
+	"apt", "apt-get", "aptitude", "dpkg", "dpkg-reconfigure",
+	"dnf", "dnf5", "yum", "rpm", "rpm-ostree", "microdnf",
+	"zypper", "apk", "xbps-install", "xbps-remove", "xbps-pkgdb",
+	"emerge", "ebuild", "quickpkg",
+	"flatpak", "snap", "brew", "nix", "nix-env", "guix",
+	"pipx", "pip", "pip3", "npm", "cargo", "rustup", "mise", "gem", "go",
+}
+
 var (
 	hostOnce sync.Once
 	hostInfo HostInfo
@@ -104,12 +121,39 @@ func osRelease() map[string]string {
 func detectHost() HostInfo {
 	// SYSTEM_PATCH_DISTRO forces the family, so a brief for another system can
 	// be read with `prompt` from the machine you have rather than the one it
-	// describes. Detection is otherwise unconditional; this only overrides the
-	// os-release ID, and every derived fact still comes from the same table.
+	// describes.
+	//
+	// ID_LIKE is carried too. Without it the override reached only the literal
+	// IDs in the table, so the derivatives it exists to preview — linuxmint,
+	// rocky, endeavouros, opensuse-tumbleweed — all landed on Unknown, which
+	// is every case worth previewing.
 	if id := os.Getenv("SYSTEM_PATCH_DISTRO"); id != "" {
-		return hostFrom(map[string]string{"ID": id}, has)
+		rel := map[string]string{"ID": id}
+		if like := derivativeLike(id); like != "" {
+			rel["ID_LIKE"] = like
+		}
+		return hostFrom(rel, has)
 	}
 	return hostFrom(osRelease(), has)
+}
+
+// derivativeLike supplies the ID_LIKE a real machine would publish, for the
+// override, which has only a name to go on.
+//
+// Only needed for IDs the table does not match directly. A real system is
+// never read through this: it publishes its own ID_LIKE.
+func derivativeLike(id string) string {
+	switch id {
+	case "linuxmint", "pop", "elementary", "zorin", "raspbian", "kali", "devuan":
+		return "debian ubuntu"
+	case "rocky", "almalinux", "ol", "amzn":
+		return "rhel fedora centos"
+	case "endeavouros", "manjaro", "cachyos", "garuda":
+		return "arch"
+	case "opensuse-tumbleweed", "opensuse-leap", "opensuse-microos":
+		return "opensuse suse"
+	}
+	return ""
 }
 
 // hostFrom builds the description from parsed os-release fields.
@@ -181,12 +225,11 @@ pactree, uname and expac do work if you need them.`
 		h.DBNote = `  /var/lib/dpkg/status                          installed packages and versions
   /var/lib/apt/lists/*Packages                  archive metadata
 
-dpkg-query, dpkg -l, apt-cache policy, apt-cache rdepends and apt-cache show
-are read-only and work. So does apt list --upgradable. uname is available.`
-		h.InspectTools = []string{
-			"Bash(dpkg:*)", "Bash(dpkg-query:*)", "Bash(apt-cache:*)", "Bash(apt-mark:*)",
-		}
-		h.ManagerBins = []string{"apt", "apt-get", "aptitude", "dpkg", "dpkg-reconfigure", "snap"}
+dpkg-query and apt-cache are read-only and available to you: dpkg-query -l,
+dpkg-query -W, apt-cache policy, apt-cache rdepends, apt-cache show. uname is
+available. dpkg and apt are blocked, because both can also install.`
+		h.InspectTools = []string{"Bash(dpkg-query:*)", "Bash(apt-cache:*)"}
+		h.ManagerBins = []string{"apt", "apt-get", "aptitude", "dpkg", "dpkg-reconfigure"}
 		h.ConfigConvention = "modified config files prompt on upgrade, or are left as " +
 			".dpkg-dist and .dpkg-new beside the original when running non-interactively"
 		h.ForeignNote = "packages from third-party repositories and PPAs, which are not " +
@@ -195,9 +238,10 @@ are read-only and work. So does apt list --upgradable. uname is available.`
 	case Fedora:
 		h.DBNote = `  /var/lib/rpm                                  the rpm database
 
-rpm -q, rpm -qa, rpm -q --whatrequires, rpm -q --provides and dnf repoquery
-are read-only and work. uname is available.`
-		h.InspectTools = []string{"Bash(rpm:*)", "Bash(repoquery:*)", "Bash(rpmquery:*)"}
+rpmquery and repoquery are read-only and available to you: rpmquery -a,
+rpmquery --whatrequires, rpmquery --provides, repoquery --requires. uname is
+available. rpm and dnf are blocked, because both can also install.`
+		h.InspectTools = []string{"Bash(rpmquery:*)", "Bash(repoquery:*)"}
 		h.ManagerBins = []string{"dnf", "yum", "rpm", "rpm-ostree", "microdnf"}
 		h.ConfigConvention = ".rpmnew and .rpmsave files left beside configs the upgrade " +
 			"could not merge"
@@ -207,8 +251,9 @@ are read-only and work. uname is available.`
 	case SUSE:
 		h.DBNote = `  /var/lib/rpm                                  the rpm database
 
-rpm -q and zypper info are read-only and work. uname is available.`
-		h.InspectTools = []string{"Bash(rpm:*)"}
+rpmquery is read-only and available to you: rpmquery -a, rpmquery --provides.
+uname is available. rpm and zypper are blocked, because both can also install.`
+		h.InspectTools = []string{"Bash(rpmquery:*)"}
 		h.ManagerBins = []string{"zypper", "rpm"}
 		h.ConfigConvention = ".rpmnew and .rpmsave files left beside configs the upgrade " +
 			"could not merge"
@@ -216,8 +261,9 @@ rpm -q and zypper info are read-only and work. uname is available.`
 	case Alpine:
 		h.DBNote = `  /lib/apk/db/installed                         installed packages
 
-apk info and apk list are read-only and work. uname is available.`
-		h.InspectTools = []string{"Bash(apk:*)"}
+That file is plain text, one stanza per package: read it directly. uname is
+available. apk is blocked, because it can also install.`
+		h.InspectTools = nil
 		h.ManagerBins = []string{"apk"}
 		h.ConfigConvention = ".apk-new files left beside configs the upgrade could not replace"
 
@@ -245,9 +291,23 @@ is available.`
 			"guess at paths; say what you could not check."
 	}
 
-	// Cross-distro managers are denied wherever they exist, not per family.
-	for _, c := range []string{"flatpak", "snap", "brew", "nix", "pipx"} {
-		if hasBin(c) {
+	// Every manager actually on this machine is denied, whatever the detected
+	// family says.
+	//
+	// The family list alone was not enough, twice over. An Unknown family
+	// declared no managers at all, so nothing was denied while the brief still
+	// told the agent its package manager was blocked. And SYSTEM_PATCH_DISTRO
+	// selects a family without changing the machine, so previewing an Ubuntu
+	// brief from an Arch box left pacman, paru and makepkg available to a run
+	// executing on that Arch box. The deny list has to describe the host, not
+	// the subject of the report.
+	seen := map[string]bool{}
+	for _, c := range h.ManagerBins {
+		seen[c] = true
+	}
+	for _, c := range allManagerBins {
+		if !seen[c] && hasBin(c) {
+			seen[c] = true
 			h.ManagerBins = append(h.ManagerBins, c)
 		}
 	}

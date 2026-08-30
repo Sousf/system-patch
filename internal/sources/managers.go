@@ -201,7 +201,7 @@ var registry = []Manager{
 		Detect:  bin("snap"),
 		Upgrade: []string{"sudo", "snap", "refresh"},
 		List:    snapUpdates,
-		Origin:  model.Origin("snap"),
+		Origin:  model.Snap,
 		Note:    "snap packages",
 	},
 
@@ -365,7 +365,7 @@ func dnfUpdates() []model.Update {
 // snapUpdates parses `snap refresh --list`, whose first line is a header.
 func snapUpdates() []model.Update {
 	out := run(3*time.Minute, "snap", "refresh", "--list")
-	return simple(model.Origin("snap"), out, func(line string) (string, string, string, bool) {
+	return simple(model.Snap, out, func(line string) (string, string, string, bool) {
 		f := strings.Fields(line)
 		if len(f) < 2 || f[0] == "Name" {
 			return "", "", "", false

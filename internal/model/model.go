@@ -21,7 +21,18 @@ const (
 	// `pacman -Syu` and `paru -Syu` never touch them however complete they
 	// look — which is exactly why they go stale unnoticed.
 	Flatpak Origin = "flatpak"
+	// Snap packages, likewise their own manager and their own store.
+	//
+	// Declared rather than spelled Origin("snap") at each use, as it was: the
+	// partitions that classify updates all ended in `default: repo`, so snaps
+	// were counted as repository packages in the interface and briefed to the
+	// agent under FULL REPOSITORY LIST.
+	Snap Origin = "snap"
 )
+
+// SystemOrigins are the origins a distribution's own package manager owns, and
+// therefore the only ones its local database can answer questions about.
+func (o Origin) System() bool { return o == Repo || o == AUR }
 
 // Update is one pending package update.
 type Update struct {

@@ -138,3 +138,82 @@ func TestUnknownHostAdmitsIt(t *testing.T) {
 		}
 	}
 }
+
+// The deny list must describe the machine running the agent, not the system the
+// brief describes. SYSTEM_PATCH_DISTRO selects a family without moving the
+// host, and an Unknown family declares no managers at all, so a family-only
+// list left the real package manager reachable in both cases.
+func TestDenyListCoversTheRealMachine(t *testing.T) {
+	here := func(c string) bool { return c == "pacman" || c == "paru" || c == "makepkg" }
+
+	// Previewing an Ubuntu brief from an Arch box.
+	h := hostFrom(map[string]string{"ID": "ubuntu", "ID_LIKE": "debian"}, here)
+	denied := strings.Join(h.DeniedTools(), " ")
+	for _, bin := range []string{"pacman", "paru", "makepkg"} {
+		if !strings.Contains(denied, "Bash("+bin+":*)") {
+			t.Errorf("override to ubuntu left %q reachable on a pacman host", bin)
+		}
+	}
+	if !strings.Contains(denied, "Bash(apt:*)") {
+		t.Error("override to ubuntu dropped apt from the deny list")
+	}
+
+	// A distribution the table does not know still denies what is installed.
+	u := hostFrom(map[string]string{"ID": "someos"}, here)
+	if u.Family != Unknown {
+		t.Fatalf("family = %q, want unknown", u.Family)
+	}
+	ud := strings.Join(u.DeniedTools(), " ")
+	if !strings.Contains(ud, "Bash(pacman:*)") {
+		t.Error("unknown family denied nothing while the brief claims the manager is blocked")
+	}
+}
+
+// A tool cannot be both granted and denied. Doing so recreates the wasted turns
+// the database note exists to prevent, since the note names the granted tools.
+func TestNoToolIsBothGrantedAndDenied(t *testing.T) {
+	for _, id := range []string{"arch", "ubuntu", "fedora", "opensuse-leap", "alpine", "void", "gentoo"} {
+		h := hostFrom(map[string]string{"ID": id, "ID_LIKE": derivativeLike(id)}, func(string) bool { return false })
+		denied := strings.Join(h.DeniedTools(), " ")
+		for _, g := range h.InspectTools {
+			if strings.Contains(denied, g) {
+				t.Errorf("%s: %s is both granted and denied", id, g)
+			}
+		}
+	}
+}
+
+// Every manager binary is denied once. Listing it in the family table and then
+// again by presence emitted the same pattern twice.
+func TestDenyListHasNoDuplicates(t *testing.T) {
+	h := hostFrom(map[string]string{"ID": "ubuntu", "ID_LIKE": "debian"},
+		func(c string) bool { return c == "snap" || c == "flatpak" })
+	seen := map[string]bool{}
+	for _, d := range h.DeniedTools() {
+		if seen[d] {
+			t.Errorf("%q appears twice in the deny list", d)
+		}
+		seen[d] = true
+	}
+}
+
+// The override exists to preview another system, and the systems worth
+// previewing are mostly derivatives that reach a family through ID_LIKE.
+func TestOverrideResolvesDerivatives(t *testing.T) {
+	cases := map[string]Family{
+		"linuxmint":           Debian,
+		"rocky":               Fedora,
+		"endeavouros":         Arch,
+		"opensuse-tumbleweed": SUSE,
+		"ubuntu":              Debian,
+	}
+	for id, want := range cases {
+		rel := map[string]string{"ID": id}
+		if like := derivativeLike(id); like != "" {
+			rel["ID_LIKE"] = like
+		}
+		if got := hostFrom(rel, func(string) bool { return false }).Family; got != want {
+			t.Errorf("SYSTEM_PATCH_DISTRO=%s -> %q, want %q", id, got, want)
+		}
+	}
+}

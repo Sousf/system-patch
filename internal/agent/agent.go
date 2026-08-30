@@ -448,7 +448,7 @@ func SystemPrompt(ups []model.Update) string {
 	host := sources.Host()
 	fmt.Fprintf(&b, "Assess what happens if this %s system is fully "+
 		"upgraded right now.\n\n", host.Describe())
-	var repo, aur, fp []model.Update
+	var repo, aur, fp, sn []model.Update
 	for _, u := range ups {
 		if IsSystem(u) {
 			continue
@@ -458,6 +458,8 @@ func SystemPrompt(ups []model.Update) string {
 			aur = append(aur, u)
 		case model.Flatpak:
 			fp = append(fp, u)
+		case model.Snap:
+			sn = append(sn, u)
 		default:
 			repo = append(repo, u)
 		}
@@ -483,9 +485,24 @@ func SystemPrompt(ups []model.Update) string {
 		fmt.Fprintf(&b, "  Mention these only if something in this transaction "+
 			"actually affects them.\n")
 	}
-	fmt.Fprintf(&b, "\nSCALE\n  %d repository packages, %s, %s\n",
-		len(repo), plural(len(aur), "AUR package"),
-		plural(len(fp), "flatpak ref"))
+	// Categories this machine does not have are omitted rather than reported as
+	// zero. "0 AUR packages" on Ubuntu invites the agent to reason about a
+	// thing that cannot exist there, which is how the Arch framing leaked back
+	// in after the rest of the brief stopped assuming it.
+	scale := []string{plural(len(repo), "repository package")}
+	for _, c := range []struct {
+		n    int
+		noun string
+	}{
+		{len(aur), "AUR package"},
+		{len(fp), "flatpak ref"},
+		{len(sn), "snap"},
+	} {
+		if c.n > 0 {
+			scale = append(scale, plural(c.n, c.noun))
+		}
+	}
+	fmt.Fprintf(&b, "\nSCALE\n  %s\n", strings.Join(scale, ", "))
 
 	// The AUR half is listed in full however long it gets. These are the
 	// packages nothing rebuilds automatically, so they are the ones the answer

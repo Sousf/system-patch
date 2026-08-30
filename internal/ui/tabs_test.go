@@ -14,12 +14,12 @@ import (
 func TestTabLabelNamesTheManager(t *testing.T) {
 	ms := []sources.Manager{
 		{Name: "apt", Origin: model.Repo},
-		{Name: "snap", Origin: model.Origin("snap")},
+		{Name: "snap", Origin: model.Snap},
 	}
 	if got := tabLabel(ms, model.Repo); got != "apt" {
 		t.Errorf("repo tab = %q, want %q", got, "apt")
 	}
-	if got := tabLabel(ms, model.Origin("snap")); got != "snap" {
+	if got := tabLabel(ms, model.Snap); got != "snap" {
 		t.Errorf("snap tab = %q, want %q", got, "snap")
 	}
 }

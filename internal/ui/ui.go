@@ -219,7 +219,7 @@ func (m *Model) installPlan() installPlan {
 			argv:  []string{"flatpak", "update", app},
 			label: "flatpak update " + app,
 		}
-	case model.Origin("snap"):
+	case model.Snap:
 		return installPlan{
 			argv:  []string{"sudo", "snap", "refresh", u.Name},
 			label: "sudo snap refresh " + u.Name,
@@ -1026,7 +1026,7 @@ func (m Model) renderSystem() string {
 	fmt.Fprintf(&b, "%s\n", stBold.Render("Full system upgrade"))
 	fmt.Fprintf(&b, "%s\n\n", stDim.Render(truncate(upgradeLabel(), m.vp.Width)))
 
-	var repo, aur, fp, flagged int
+	var repo, aur, fp, sn, flagged int
 	for _, u := range m.updates {
 		if agent.IsSystem(u) {
 			continue
@@ -1036,6 +1036,8 @@ func (m Model) renderSystem() string {
 			aur++
 		case model.Flatpak:
 			fp++
+		case model.Snap:
+			sn++
 		default:
 			repo++
 		}
@@ -1051,6 +1053,9 @@ func (m Model) renderSystem() string {
 	}
 	if fp > 0 {
 		fmt.Fprintf(&b, " · %d flatpak", fp)
+	}
+	if sn > 0 {
+		fmt.Fprintf(&b, " · %d snap", sn)
 	}
 	if flagged > 0 {
 		fmt.Fprintf(&b, " · %s", stRed.Render(fmt.Sprintf("%d flagged", flagged)))
