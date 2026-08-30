@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/Sousf/system-patch/internal/agent"
 	"github.com/Sousf/system-patch/internal/model"
 	"github.com/Sousf/system-patch/internal/sources"
@@ -166,5 +168,77 @@ func TestUnratedSeverityHasWords(t *testing.T) {
 	u := model.Update{CVEs: []string{"CVE-1", "CVE-2"}}
 	if got := u.Explain(); !strings.Contains(got, "unrated") {
 		t.Errorf("Explain() = %q, want it to name the missing rating", got)
+	}
+}
+
+// The chrome must fit the terminal exactly. The pinned verdict and the tab bar
+// each take a line off the scrolling area and each appears on a state change
+// rather than on a resize, so the viewport has to be resized when they do.
+func TestViewportHeightLeavesRoomForChrome(t *testing.T) {
+	const h = 40
+	cases := []struct {
+		name    string
+		origins []model.Origin
+		text    string
+		mode    pane
+		want    int // viewport height
+	}{
+		{"no tabs, no pin", []model.Origin{model.Repo}, "", paneNotes, h - 3},
+		{"tabs, no pin", []model.Origin{model.Repo, model.AUR}, "", paneNotes, h - 4},
+		{"no tabs, routine pin", []model.Origin{model.Repo},
+			"## VERDICT: ROUTINE\n", paneAgent, h - 4},
+		{"no tabs, urgent pin", []model.Origin{model.Repo},
+			"## VERDICT: INSTALL NOW\n", paneAgent, h - 5},
+		{"tabs and urgent pin", []model.Origin{model.Repo, model.Flatpak},
+			"## VERDICT: INSTALL NOW\n", paneAgent, h - 6},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := &Model{w: 120, h: h, tabOrigins: c.origins, agentText: c.text, mode: c.mode}
+			m.layout()
+			if m.vp.Height != c.want {
+				t.Errorf("viewport height = %d, want %d", m.vp.Height, c.want)
+			}
+			// Whatever the chrome, the rendered view must not exceed the
+			// terminal it was given.
+			m.vp.SetContent(strings.Repeat("line\n", 200))
+			if got := lipgloss.Height(m.View()); got > h {
+				t.Errorf("View() is %d lines tall in a %d-line terminal", got, h)
+			}
+		})
+	}
+}
+
+// One origin is not a choice, so the bar showing it is a wasted line.
+func TestTabBarHiddenWithNothingToSwitch(t *testing.T) {
+	m := Model{updates: []model.Update{{Name: "a", Origin: model.Repo}}}
+	m.tabOrigins = []model.Origin{model.Repo}
+	if got := m.renderTabs(); got != "" {
+		t.Errorf("tab bar rendered for a single origin: %q", got)
+	}
+	m.tabOrigins = []model.Origin{model.Repo, model.AUR}
+	if m.renderTabs() == "" {
+		t.Error("tab bar hidden when two origins are pending")
+	}
+}
+
+// The verdict has to survive scrolling, which means living outside the
+// viewport rather than at the top of its content.
+func TestVerdictIsPinnedOutsideTheViewport(t *testing.T) {
+	m := &Model{w: 120, h: 40, mode: paneAgent,
+		agentText: "## thing\n\n## VERDICT: INSTALL NOW\n\nbody\n"}
+	m.layout()
+	if m.pinnedVerdict() == "" {
+		t.Fatal("no pinned verdict for a document that states one")
+	}
+	if strings.Contains(m.renderAgent(), "INSTALL NOW") &&
+		!strings.Contains(m.renderAgent(), "VERDICT") {
+		t.Error("banner still written into the scrolling content")
+	}
+	// Scrolled to the bottom, the verdict must still be on screen.
+	m.vp.SetContent(m.renderAgent())
+	m.vp.GotoBottom()
+	if !strings.Contains(m.View(), "INSTALL NOW") {
+		t.Error("verdict lost once the pane is scrolled to the bottom")
 	}
 }

@@ -372,7 +372,13 @@ func (m *Model) layout() {
 		rw = 20
 	}
 	// Chrome: title, tab bar, and below the body a blank line and the help.
+	// The tab bar is omitted when there is nothing to switch between, and the
+	// pinned verdict takes its lines off the top of the scrolling area.
 	vh := m.h - 4
+	if !m.hasTabs() {
+		vh++
+	}
+	vh -= m.pinHeight()
 	if vh < 3 {
 		vh = 3
 	}
@@ -382,6 +388,45 @@ func (m *Model) layout() {
 	} else {
 		m.vp.Width, m.vp.Height = rw, vh
 	}
+}
+
+// hasTabs reports whether the tab bar has anything to switch between.
+func (m Model) hasTabs() bool { return len(m.tabOrigins) >= 2 }
+
+// pinHeight is how many lines the pinned verdict occupies.
+//
+// Computed from the verdict alone rather than by rendering it, because layout
+// needs the height before it has set the width the banner would be rendered
+// at.
+func (m Model) pinHeight() int {
+	if m.mode != paneAgent || m.agentText == "" {
+		return 0
+	}
+	v, ok := render.FindVerdict(m.agentText)
+	if !ok {
+		return 0
+	}
+	if render.Urgency(v) > 0 {
+		return 2 // the install hint rides with it
+	}
+	return 1
+}
+
+// pinnedVerdict is the verdict held above the scrolling pane.
+//
+// Outside the viewport, not the first line of its content. Inside it the
+// banner scrolled away with everything else, so the one line worth reading
+// was gone by the time you had read the evidence under it.
+func (m Model) pinnedVerdict() string {
+	if m.pinHeight() == 0 {
+		return ""
+	}
+	v, _ := render.FindVerdict(m.agentText)
+	out := verdictBanner(v, m.vp.Width)
+	if render.Urgency(v) > 0 {
+		out += "\n" + stDim.Render("  i to install (confirms first)")
+	}
+	return out
 }
 
 func (m Model) leftWidth() int {
@@ -396,6 +441,11 @@ func (m Model) leftWidth() int {
 }
 
 func (m *Model) refreshPane() {
+	// Re-run first: the pinned verdict and the tab bar both take lines off the
+	// viewport, and both appear on state changes rather than on a resize. A
+	// viewport still sized for the old chrome overruns the terminal by however
+	// many lines the pin occupies.
+	m.layout()
 	if m.mode == paneAgent {
 		m.vp.SetContent(m.renderAgent())
 		return
@@ -1139,16 +1189,6 @@ func (m Model) renderAgent() string {
 	}
 	b.WriteString("\n")
 
-	// The verdict leads. It is the one line worth reading if you read nothing
-	// else, so it sits above the document rather than at the end of it, and it
-	// appears the moment the agent commits to it mid-stream.
-	if v, ok := render.FindVerdict(m.agentText); ok {
-		b.WriteString(verdictBanner(v, m.vp.Width) + "\n")
-		if render.Urgency(v) > 0 {
-			b.WriteString(stDim.Render("  i to install (confirms first)") + "\n")
-		}
-	}
-
 	if m.agentRunning {
 		// Elapsed seconds alongside the spinner. A spinner only proves the
 		// interface is repainting; a climbing clock proves the run itself is
@@ -1248,7 +1288,11 @@ func tabLabel(ms []sources.Manager, o model.Origin) string {
 // renderTabs is the manager tab bar: the combined view first, then one tab
 // per origin that actually has pending rows.
 func (m Model) renderTabs() string {
-	if len(m.tabOrigins) == 0 {
+	// One origin is not a choice. The bar then read "all 7 · repo 7", two tabs
+	// over the same seven packages differing only in whether the synthetic
+	// whole-system row is listed, which is not what a filter is for. It earns
+	// the line the moment a second origin has something pending.
+	if len(m.tabOrigins) < 2 {
 		return ""
 	}
 	label := func(i int, text string, n int) string {
@@ -1295,10 +1339,16 @@ func (m Model) View() string {
 	right := ""
 	if m.ready {
 		right = m.vp.View()
+		if pin := m.pinnedVerdict(); pin != "" {
+			right = pin + "\n" + right
+		}
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
-	keys := "↑↓ move · ←→ manager · a analyse · i install · r reload · R rescan · q quit"
+	keys := "↑↓ move · a analyse · i install · r reload · R rescan · q quit"
+	if m.hasTabs() {
+		keys = "↑↓ move · ←→ manager · a analyse · i install · r reload · R rescan · q quit"
+	}
 	if m.mode == paneAgent && m.agentRunning {
 		keys = "x cancel · tab scroll · esc back · q quit"
 	} else if m.focusRight {
@@ -1319,8 +1369,11 @@ func (m Model) View() string {
 		keys = stYellow.Render("run `"+m.plan.label+"`? ") + stDim.Render(note)
 	}
 
-	return fmt.Sprintf("%s%s\n%s\n%s\n\n%s",
-		title, sub, m.renderTabs(), body, stDim.Render(keys))
+	head := title + sub
+	if tabs := m.renderTabs(); tabs != "" {
+		head += "\n" + tabs
+	}
+	return fmt.Sprintf("%s\n%s\n\n%s", head, body, stDim.Render(keys))
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
