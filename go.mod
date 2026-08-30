@@ -1,4 +1,4 @@
-module github.com/Sousf/patchlens
+module github.com/Sousf/system-patch
 
 go 1.27.0
 

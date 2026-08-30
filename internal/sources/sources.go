@@ -26,9 +26,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Sousf/patchlens/internal/adapters"
-	"github.com/Sousf/patchlens/internal/cache"
-	"github.com/Sousf/patchlens/internal/model"
+	"github.com/Sousf/system-patch/internal/adapters"
+	"github.com/Sousf/system-patch/internal/cache"
+	"github.com/Sousf/system-patch/internal/model"
 )
 
 const aurRPC = "https://aur.archlinux.org/rpc/v5/info"

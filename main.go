@@ -1,6 +1,6 @@
-// Command patchlens shows every pending package update, explains why each one
-// was pushed, and can send an agent to read the source diff and judge whether
-// it is worth installing.
+// Command system-patch shows every pending package update, explains why each
+// one was pushed, and can send an agent to read the source diff and judge
+// whether it is worth installing.
 //
 // Run with no arguments for the interactive interface. The subcommands exist
 // so the same data can drive a status bar or a notification without a TTY.
@@ -19,13 +19,13 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/Sousf/patchlens/internal/adapters"
-	"github.com/Sousf/patchlens/internal/agent"
-	"github.com/Sousf/patchlens/internal/cache"
-	"github.com/Sousf/patchlens/internal/model"
-	"github.com/Sousf/patchlens/internal/render"
-	"github.com/Sousf/patchlens/internal/sources"
-	"github.com/Sousf/patchlens/internal/ui"
+	"github.com/Sousf/system-patch/internal/adapters"
+	"github.com/Sousf/system-patch/internal/agent"
+	"github.com/Sousf/system-patch/internal/cache"
+	"github.com/Sousf/system-patch/internal/model"
+	"github.com/Sousf/system-patch/internal/render"
+	"github.com/Sousf/system-patch/internal/sources"
+	"github.com/Sousf/system-patch/internal/ui"
 )
 
 // cacheTTL bounds how stale a non-interactive answer may be. Short enough that
@@ -34,16 +34,16 @@ import (
 // anything invalidates the cache regardless of age.
 const cacheTTL = 10 * time.Minute
 
-const usage = `patchlens — what is pending, why it was pushed, and whether to take it
+const usage = `system-patch — what is pending, why it was pushed, and whether to take it
 
-  patchlens              interactive two-pane browser
-  patchlens list         one line per pending update
-  patchlens json         the same data as JSON, for scripts and bar modules
-  patchlens count        number of flagged updates, for a status badge
-  patchlens notes <pkg>  release notes for one package, plain text
-  patchlens analyse <pkg>  send an agent to read the source diff and judge it
-  patchlens analyse system   assess upgrading everything, right now
-  patchlens prompt <pkg>   print that agent's brief without running it
+  system-patch              interactive two-pane browser
+  system-patch list         one line per pending update
+  system-patch json         the same data as JSON, for scripts and bar modules
+  system-patch count        number of flagged updates, for a status badge
+  system-patch notes <pkg>  release notes for one package, plain text
+  system-patch analyse <pkg>  send an agent to read the source diff and judge it
+  system-patch analyse system   assess upgrading everything, right now
+  system-patch prompt <pkg>   print that agent's brief without running it
 
 Keys inside the interface:
   ↑/↓ or j/k   move            a      analyse the source (A re-runs, ignoring
@@ -56,13 +56,13 @@ Keys inside the interface:
 func main() {
 	// Reap cache entries no reader can serve and scratch directories orphaned
 	// by killed runs. In the background: it is pure hygiene, and startup —
-	// especially `patchlens count` from a status bar — must not wait on it.
+	// especially `system-patch count` from a status bar — must not wait on it.
 	go cache.Sweep()
 
 	args := os.Args[1:]
 	if len(args) == 0 {
 		if err := ui.Run(); err != nil {
-			fmt.Fprintln(os.Stderr, "patchlens:", err)
+			fmt.Fprintln(os.Stderr, "system-patch:", err)
 			os.Exit(1)
 		}
 		return
@@ -77,26 +77,26 @@ func main() {
 		os.Exit(cmdCount())
 	case "notes":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "patchlens notes: need a package name")
+			fmt.Fprintln(os.Stderr, "system-patch notes: need a package name")
 			os.Exit(2)
 		}
 		os.Exit(cmdNotes(args[1]))
 	case "analyse", "analyze":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "patchlens analyse: need a package name")
+			fmt.Fprintln(os.Stderr, "system-patch analyse: need a package name")
 			os.Exit(2)
 		}
 		os.Exit(cmdAnalyse(args[1], false))
 	case "prompt":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "patchlens prompt: need a package name")
+			fmt.Fprintln(os.Stderr, "system-patch prompt: need a package name")
 			os.Exit(2)
 		}
 		os.Exit(cmdAnalyse(args[1], true))
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
-		fmt.Fprintf(os.Stderr, "patchlens: unknown command %q\n\n%s", args[0], usage)
+		fmt.Fprintf(os.Stderr, "system-patch: unknown command %q\n\n%s", args[0], usage)
 		os.Exit(2)
 	}
 }
@@ -154,7 +154,7 @@ func find(name string) (model.Update, []model.Update, bool) {
 func cmdAnalyse(name string, promptOnly bool) int {
 	u, all, ok := find(name)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "patchlens: %s has no pending update\n", name)
+		fmt.Fprintf(os.Stderr, "system-patch: %s has no pending update\n", name)
 		return 1
 	}
 	var n model.Notes
@@ -168,18 +168,18 @@ func cmdAnalyse(name string, promptOnly bool) int {
 	}
 
 	// A stored analysis of these exact versions is shown rather than bought
-	// again. PATCHLENS_FORCE re-runs when a second opinion is wanted.
-	if os.Getenv("PATCHLENS_FORCE") == "" {
+	// again. SYSTEM_PATCH_FORCE re-runs when a second opinion is wanted.
+	if os.Getenv("SYSTEM_PATCH_FORCE") == "" {
 		if s, hit := agent.LoadStored(u); hit {
 			emit(s.Text)
 			fmt.Fprintln(os.Stderr,
-				"  (stored analysis — PATCHLENS_FORCE=1 to re-run)")
+				"  (stored analysis — SYSTEM_PATCH_FORCE=1 to re-run)")
 			return 0
 		}
 	}
 
 	if !agent.Available() {
-		fmt.Fprintln(os.Stderr, "patchlens: claude CLI not found on PATH")
+		fmt.Fprintln(os.Stderr, "system-patch: claude CLI not found on PATH")
 		return 1
 	}
 
@@ -189,7 +189,7 @@ func cmdAnalyse(name string, promptOnly bool) int {
 	defer cancel()
 
 	// Rendered Markdown for a human at a terminal; raw Markdown when the
-	// output is going somewhere else. `patchlens analyse x > report.md` must
+	// output is going somewhere else. `system-patch analyse x > report.md` must
 	// produce a Markdown file, not a file full of ANSI escapes.
 	tty := isTerminal(os.Stdout)
 
@@ -210,7 +210,7 @@ func cmdAnalyse(name string, promptOnly bool) int {
 			}
 		}
 		if line.Done && line.Err != nil && !errors.Is(line.Err, context.Canceled) {
-			fmt.Fprintln(os.Stderr, "patchlens: agent failed:", line.Err)
+			fmt.Fprintln(os.Stderr, "system-patch: agent failed:", line.Err)
 			return 1
 		}
 	}
@@ -321,7 +321,7 @@ func cmdNotes(name string) int {
 		}
 	}
 	if found == nil {
-		fmt.Fprintf(os.Stderr, "patchlens: %s has no pending update\n", name)
+		fmt.Fprintf(os.Stderr, "system-patch: %s has no pending update\n", name)
 		return 1
 	}
 

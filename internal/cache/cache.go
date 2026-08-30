@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const userAgent = "patchlens/0.1"
+const userAgent = "system-patch/0.1"
 
 // Retention per class of cached file, shared by the readers and the sweeper
 // so the two cannot drift. The rule that makes deletion safe by construction:
@@ -111,7 +111,7 @@ func xdg(env, fallback string) string {
 		home, _ := os.UserHomeDir()
 		base = filepath.Join(home, fallback)
 	}
-	p := filepath.Join(base, "patchlens")
+	p := filepath.Join(base, "system-patch")
 	_ = os.MkdirAll(p, 0o700)
 	return p
 }

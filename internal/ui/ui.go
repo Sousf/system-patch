@@ -20,11 +20,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Sousf/patchlens/internal/adapters"
-	"github.com/Sousf/patchlens/internal/agent"
-	"github.com/Sousf/patchlens/internal/model"
-	"github.com/Sousf/patchlens/internal/render"
-	"github.com/Sousf/patchlens/internal/sources"
+	"github.com/Sousf/system-patch/internal/adapters"
+	"github.com/Sousf/system-patch/internal/agent"
+	"github.com/Sousf/system-patch/internal/model"
+	"github.com/Sousf/system-patch/internal/render"
+	"github.com/Sousf/system-patch/internal/sources"
 )
 
 // Palette. Adaptive so the tool stays legible on a light terminal, which the
@@ -1208,7 +1208,7 @@ func (m Model) View() string {
 			flagged++
 		}
 	}
-	title := stTitle.Render("patchlens")
+	title := stTitle.Render("system-patch")
 	sub := stDim.Render(fmt.Sprintf(" %d updates", len(m.updates)))
 	if flagged > 0 {
 		sub += stRed.Render(fmt.Sprintf(" · %d flagged", flagged))

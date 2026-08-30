@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install.sh — build patchlens and link it into ~/.local/bin.
+# install.sh — build system-patch and link it into ~/.local/bin.
 #
 # Links rather than copies, so `git pull && go build` updates the installed
 # command without a reinstall step.
@@ -14,14 +14,14 @@ info() { printf '\033[1;34m▸\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 
-command -v go >/dev/null || { echo "patchlens: go is required to build" >&2; exit 1; }
+command -v go >/dev/null || { echo "system-patch: go is required to build" >&2; exit 1; }
 
 info "building"
-( cd "$HERE" && go build -trimpath -ldflags='-s -w' -o patchlens . )
+( cd "$HERE" && go build -trimpath -ldflags='-s -w' -o system-patch . )
 
 mkdir -p "$BIN"
-ln -sfn "$HERE/patchlens" "$BIN/patchlens"
-ok "linked $BIN/patchlens"
+ln -sfn "$HERE/system-patch" "$BIN/system-patch"
+ok "linked $BIN/system-patch"
 
 case ":$PATH:" in
   *":$BIN:"*) ;;
@@ -47,4 +47,4 @@ if ((${#missing[@]})); then
   printf '%s\n' "${missing[@]}"
 fi
 
-ok "run: patchlens"
+ok "run: system-patch"

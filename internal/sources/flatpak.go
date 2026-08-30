@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sousf/patchlens/internal/model"
+	"github.com/Sousf/system-patch/internal/model"
 )
 
 // flatpakColumns asks for a stable, tab-separated shape rather than the

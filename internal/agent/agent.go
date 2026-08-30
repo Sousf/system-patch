@@ -19,10 +19,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Sousf/patchlens/internal/adapters"
-	"github.com/Sousf/patchlens/internal/cache"
-	"github.com/Sousf/patchlens/internal/model"
-	"github.com/Sousf/patchlens/internal/sources"
+	"github.com/Sousf/system-patch/internal/adapters"
+	"github.com/Sousf/system-patch/internal/cache"
+	"github.com/Sousf/system-patch/internal/model"
+	"github.com/Sousf/system-patch/internal/sources"
 )
 
 // Available reports whether the claude CLI is on PATH.
@@ -46,7 +46,8 @@ func Available() bool {
 // The saving is 4.5x, not the 1.7x the per-token rates alone suggest, because
 // the cheaper model also did less work to get there.
 //
-// Override with PATCHLENS_MODEL for a package that deserves a second opinion.
+// Override with SYSTEM_PATCH_MODEL for a package that deserves a second
+// opinion.
 const defaultModel = "claude-sonnet-5"
 
 // Effort is the real cost dial, not the model tier.
@@ -67,11 +68,11 @@ const (
 // settings resolves model and effort, letting the environment override both so
 // the choice is the user's without a rebuild.
 func settings(u model.Update) (modelID, effort string) {
-	modelID = os.Getenv("PATCHLENS_MODEL")
+	modelID = os.Getenv("SYSTEM_PATCH_MODEL")
 	if modelID == "" {
 		modelID = defaultModel
 	}
-	effort = os.Getenv("PATCHLENS_EFFORT")
+	effort = os.Getenv("SYSTEM_PATCH_EFFORT")
 	if effort == "" {
 		effort = effortRoutine
 		// The whole-transaction assessment always gets the full pass: it is
@@ -570,9 +571,9 @@ func truncate(s string, n int) string {
 
 // Brief picks the right prompt for an update.
 //
-// One place decides, so the preview (`patchlens prompt`) and the run can never
-// disagree about what was asked — the preview exists precisely so a verdict can
-// be traced back to its instructions.
+// One place decides, so the preview (`system-patch prompt`) and the run can
+// never disagree about what was asked — the preview exists precisely so a
+// verdict can be traced back to its instructions.
 func Brief(u model.Update, n model.Notes, all []model.Update) string {
 	if IsSystem(u) {
 		return SystemPrompt(all)
@@ -668,10 +669,10 @@ func Run(ctx context.Context, u model.Update, n model.Notes, allUpdates []model.
 		args = append(args, disallowedTools...)
 		cmd := exec.CommandContext(ctx, "claude", args...)
 
-		// Run in a scratch directory rather than wherever patchlens happens to
+		// Run in a scratch directory rather than wherever system-patch happens to
 		// have been launched from. The agent downloads diffs and unpacks
 		// sources as it works, and without this it does that in the user's
-		// current project — observed creating .patchlens-tmp/ and tmp_libheif/
+		// current project — observed creating .system-patch-tmp/ and tmp_libheif/
 		// inside this very repository. Removed when the run ends.
 		if dir, err := os.MkdirTemp(workRoot(), "run-"); err == nil {
 			cmd.Dir = dir

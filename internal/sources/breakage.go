@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sousf/patchlens/internal/cache"
-	"github.com/Sousf/patchlens/internal/model"
+	"github.com/Sousf/system-patch/internal/cache"
+	"github.com/Sousf/system-patch/internal/model"
 )
 
 // Deps is what the local database knows about a package's place in the graph.

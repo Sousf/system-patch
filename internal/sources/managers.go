@@ -10,14 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Sousf/patchlens/internal/model"
+	"github.com/Sousf/system-patch/internal/model"
 )
 
 // Manager is one package manager detected on this machine.
 //
 // "Full system upgrade" is only an honest phrase if it names everything that
 // installs software here, and that set differs per machine. So the registry
-// below is a declarative table of managers patchlens knows how to drive, and
+// below is a declarative table of managers system-patch knows how to drive, and
 // which of them exist is decided at runtime by Detect. Nothing is hardcoded to
 // Arch: the same binary on a Debian or Fedora box finds apt or dnf instead,
 // and adding another manager is one entry, not a new code path.
@@ -89,7 +89,7 @@ func simple(origin model.Origin, out string, parse func(string) (string, string,
 	return ups
 }
 
-// registry is every manager patchlens can drive, in upgrade order: system
+// registry is every manager system-patch can drive, in upgrade order: system
 // packages first, because everything else may link against them.
 var registry = []Manager{
 	// ── system package managers ──────────────────────────────────────────

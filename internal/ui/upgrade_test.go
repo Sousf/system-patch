@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Sousf/patchlens/internal/agent"
-	"github.com/Sousf/patchlens/internal/model"
+	"github.com/Sousf/system-patch/internal/agent"
+	"github.com/Sousf/system-patch/internal/model"
 )
 
 func TestShellJoinQuotesDangerousArgs(t *testing.T) {
