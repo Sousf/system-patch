@@ -31,13 +31,29 @@ Builds a static binary and links it into `~/.local/bin`. Go 1.24+
 
 ## Requirements
 
-| Tool                | Provides              | Without it                      |
-| ------------------- | --------------------- | ------------------------------- |
-| `pacman-contrib`    | `checkupdates`        | no repo updates listed          |
-| `paru`              | AUR updates           | no AUR updates listed           |
-| `arch-audit`        | Security Tracker CVEs | repo updates show no advisories |
-| `gh` (optional)     | GitHub API token      | 60 req/hour instead of 5000     |
-| `claude` (optional) | source analysis       | `a` reports the CLI is missing  |
+| Tool                | Provides         | Without it                     |
+| ------------------- | ---------------- | ------------------------------ |
+| `gh` (optional)     | GitHub API token | 60 req/hour instead of 5000    |
+| `claude` (optional) | source analysis  | `a` reports the CLI is missing |
+
+On Arch, three more: `pacman-contrib` for `checkupdates`, without which no repo
+updates are listed; `paru` for AUR updates; `arch-audit` for Security Tracker
+CVEs, without which repo updates show no advisories.
+
+## Other distributions
+
+Arch is the most complete. Debian, Ubuntu and Fedora list and upgrade, and the
+agent gets the right database paths and read-only tools for the system it is
+on. openSUSE, Alpine, Void and Gentoo are upgraded but not itemised.
+
+The analysis names the running distribution and never describes a tool or path
+it has not confirmed exists. Where the dependency graph cannot be read, the analysis summary will state this is the case.
+
+To read a brief for a system you are not on:
+
+```sh
+SYSTEM_PATCH_DISTRO=ubuntu system-patch prompt <pkg>
+```
 
 ## Usage
 
@@ -69,8 +85,9 @@ diff URL, any tracker CVEs and the provenance history, then asks for: what
 changed, why it was pushed, security impact, a supply-chain check of the diff,
 regression risk, and a verdict.
 
-`Edit`, `Write`, `sudo`, `pacman`, `paru` and `makepkg` are denied. It runs
-in a scratch directory that is deleted afterwards.
+`Edit`, `Write`, `sudo` and every package manager on the machine are denied,
+`apt` and `dnf` included. It runs in a scratch directory that is deleted
+afterwards.
 
 It does get general shell access through Bash for unpacking and grepping
 diffs. The containment is the scratch directory and the denied tools.

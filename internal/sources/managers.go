@@ -50,6 +50,10 @@ func has(cmd string) bool {
 	return err == nil
 }
 
+// HasBin reports whether a command exists on PATH, for callers outside this
+// package that need to state a fact about the machine rather than guess at it.
+func HasBin(cmd string) bool { return has(cmd) }
+
 func bin(cmd string) func() bool {
 	return func() bool { return has(cmd) }
 }

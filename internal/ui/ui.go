@@ -1043,7 +1043,15 @@ func (m Model) renderSystem() string {
 			flagged++
 		}
 	}
-	fmt.Fprintf(&b, "%d repository · %d AUR · %d flatpak", repo, aur, fp)
+	// Counts of zero for a category this machine does not have are noise, so
+	// each is shown only when it applies. Repository packages always are.
+	fmt.Fprintf(&b, "%d repository", repo)
+	if aur > 0 {
+		fmt.Fprintf(&b, " · %d AUR", aur)
+	}
+	if fp > 0 {
+		fmt.Fprintf(&b, " · %d flatpak", fp)
+	}
 	if flagged > 0 {
 		fmt.Fprintf(&b, " · %s", stRed.Render(fmt.Sprintf("%d flagged", flagged)))
 	}
@@ -1092,11 +1100,20 @@ func (m Model) renderSystem() string {
 	w := m.vp.Width
 	fmt.Fprintf(&b, "%s\n", stDim.Render(truncate(
 		"press a to assess what this upgrade would actually do:", w)))
+	// The middle two lines name what this host's analysis actually covers.
+	// Promising an AUR rebuild list on a machine with no AUR advertises a
+	// section the report will not contain.
+	rebuild := "what the upgrade does not rebuild for you"
+	config := "reboots, config files left to merge, and recovery if it goes wrong"
+	if sources.Host().Family == sources.Arch {
+		rebuild = "which AUR packages need rebuilding by hand"
+		config = "reboots, .pacnew files, and recovery if it goes wrong"
+	}
 	for _, l := range []string{
 		"what breaks, and what to do about it",
-		"which AUR packages need rebuilding by hand",
+		rebuild,
 		"whether any announcement applies here",
-		"reboots, .pacnew files, and recovery if it goes wrong",
+		config,
 	} {
 		fmt.Fprintf(&b, "%s\n", stDim.Render(truncate("  · "+l, w)))
 	}

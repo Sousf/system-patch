@@ -168,7 +168,16 @@ var tagRe = strings.NewReplacer("\n", " ", "\t", " ")
 //
 // Cached for an hour: the feed changes a few times a month, and a system
 // upgrade analysis should not re-fetch it on every run.
+//
+// Returns nothing off Arch. The feed announces manual steps for one
+// distribution, and the callers — the interface banner and the system brief —
+// both treat an empty result as "no announcements to check", which is the
+// correct reading elsewhere. Debian and Fedora publish nothing equivalent:
+// their release notes are per-release, not per-upgrade.
 func News(limit int) []NewsItem {
+	if !Host().ArchNews {
+		return nil
+	}
 	var items []NewsItem
 	if cache.Get("arch-news", time.Hour, &items) && len(items) > 0 {
 		return trim(items, limit)
@@ -234,19 +243,89 @@ type Breakage struct {
 	Deps     Deps
 	Sonames  []string
 	AtRiskBy []string // reverse dependencies that came from the AUR
+	// Source names the database this came from: "pacman", "dpkg", or "" when
+	// the running system has none this tool can read. The distinction matters
+	// more than it looks: an empty Deps means "nothing depends on it" only if
+	// something was actually read, and reporting the two the same way is how a
+	// brief ends up asserting a fact it never checked.
+	Source string
 }
 
+// Known reports whether the dependency graph was actually read.
+func (b Breakage) Known() bool { return b.Source != "" }
+
 // Assess gathers the breakage picture for a single pending update.
+//
+// Dispatched on the host's packaging family. Only the pacman path can answer
+// the soname question, because only there does a library keep one package name
+// across a soname change. dpkg and rpm encode the soname into the package name,
+// so the archive carries both versions and the solver refuses the partial
+// upgrade that would break — a different, and largely already-answered,
+// question.
 func Assess(u model.Update) Breakage {
-	b := Breakage{Deps: InstalledDeps(u.Name)}
-	if u.Origin == model.Repo {
-		b.Sonames = SonameChanges(b.Deps.Provides, CandidateProvides(u.Name))
-	}
-	foreign := Foreign()
-	for _, r := range append(append([]string{}, b.Deps.RequiredBy...), b.Deps.OptionalFor...) {
-		if foreign[r] {
-			b.AtRiskBy = append(b.AtRiskBy, r)
+	switch Host().Family {
+	case Arch:
+		b := Breakage{Deps: InstalledDeps(u.Name), Source: "pacman"}
+		if u.Origin == model.Repo {
+			b.Sonames = SonameChanges(b.Deps.Provides, CandidateProvides(u.Name))
+		}
+		foreign := Foreign()
+		for _, r := range append(append([]string{}, b.Deps.RequiredBy...), b.Deps.OptionalFor...) {
+			if foreign[r] {
+				b.AtRiskBy = append(b.AtRiskBy, r)
+			}
+		}
+		return b
+	case Debian:
+		if d, ok := debDeps(u.Name); ok {
+			return Breakage{Deps: d, Source: "dpkg"}
 		}
 	}
-	return b
+	return Breakage{}
+}
+
+// debDeps reads reverse dependencies from the apt cache.
+//
+// The narrow invocation excludes Recommends and Suggests, which describe
+// packages that keep working without this one and are the wrong list for a
+// breakage question. It is tried first and the plain form second, because
+// those flags are spelled with capitals in apt's own documentation and a
+// rejected flag yields no output at all.
+//
+// ok is false when nothing could be read, and that distinction is the point:
+// an empty result reported as fact becomes "nothing depends on it", which is
+// the fabrication this whole path exists to avoid.
+func debDeps(name string) (Deps, bool) {
+	if !has("apt-cache") {
+		return Deps{}, false
+	}
+	for _, args := range [][]string{
+		{"rdepends", "--installed", "--no-Recommends", "--no-Suggests",
+			"--no-Conflicts", "--no-Breaks", "--no-Replaces", "--no-Enhances", name},
+		{"rdepends", "--installed", name},
+	} {
+		out := run(30*time.Second, "apt-cache", args...)
+		if strings.TrimSpace(out) == "" {
+			continue
+		}
+		var d Deps
+		seen := map[string]bool{name: true}
+		for _, line := range strings.Split(out, "\n") {
+			// Data lines are indented; the package name and the "Reverse
+			// Depends:" header are not. Alternatives carry a leading pipe.
+			if line == "" || !strings.HasPrefix(line, " ") {
+				continue
+			}
+			dep := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "|"))
+			if dep == "" || seen[dep] {
+				continue
+			}
+			seen[dep] = true
+			d.RequiredBy = append(d.RequiredBy, dep)
+		}
+		// Output that parsed to nothing still proves the query ran: the package
+		// is real and genuinely has no installed reverse dependencies.
+		return d, true
+	}
+	return Deps{}, false
 }

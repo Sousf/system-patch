@@ -97,46 +97,58 @@ func workRoot() string {
 	return p
 }
 
-// Tools pre-approved for the analysis, so it runs without prompting.
+// allowedTools returns the tools pre-approved for the analysis, so it runs
+// without prompting.
 //
 // This list grants; it does not confine. Observed runs also reach for awk,
 // python3 and mkdir through Bash, which is reasonable for unpacking a diff —
 // so treat Bash here as general shell access, not as a whitelist of two
 // commands.
-var allowedTools = []string{
-	"WebFetch", "WebSearch", "Read", "Grep", "Glob",
-	"Bash(git:*)", "Bash(curl:*)",
-	// Checksum and archive tools. Without these a run reports "I could not
-	// verify the tarball checksum, the sandbox denied it" — observed on
-	// libaio, where confirming the PKGBUILD's sums after an upstream host
-	// change was the whole supply-chain question.
-	"Bash(sha256sum:*)", "Bash(sha512sum:*)", "Bash(b2sum:*)",
-	"Bash(md5sum:*)", "Bash(tar:*)", "Bash(file:*)", "Bash(diff:*)",
-	// Read-only ways to inspect the local system. pactree walks the dependency
-	// graph and uname identifies the running kernel, both of which the
-	// breakage question turns on.
-	"Bash(pactree:*)", "Bash(uname:*)", "Bash(expac:*)",
+//
+// The inspection half is per family: pactree and expac are Arch's, dpkg-query
+// and apt-cache are Debian's. Granting the wrong set is not merely useless, it
+// invites a run to try them and report the failure as a finding.
+func allowedTools() []string {
+	base := []string{
+		"WebFetch", "WebSearch", "Read", "Grep", "Glob",
+		"Bash(git:*)", "Bash(curl:*)",
+		// Checksum and archive tools. Without these a run reports "I could not
+		// verify the tarball checksum, the sandbox denied it" — observed on
+		// libaio, where confirming the PKGBUILD's sums after an upstream host
+		// change was the whole supply-chain question.
+		"Bash(sha256sum:*)", "Bash(sha512sum:*)", "Bash(b2sum:*)",
+		"Bash(md5sum:*)", "Bash(tar:*)", "Bash(file:*)", "Bash(diff:*)",
+		// uname identifies the running kernel, which the breakage question
+		// turns on everywhere.
+		"Bash(uname:*)", "Bash(cat:*)", "Bash(ls:*)",
+	}
+	return append(base, sources.Host().InspectTools...)
 }
 
-// dbNote tells the agent how to inspect the package database without pacman.
+// dbNote tells the agent how to inspect the package database without invoking
+// the package manager.
 //
-// pacman is denied outright, and that denial is worth keeping: a tool whose
-// job is answering "should I install this?" must not be able to install it.
-// But the denial is by command name, so it also blocks the harmless read-only
-// queries (-Qi, -Si, -Qmq) the analysis genuinely wants. A run was observed
-// spending three turns discovering this before working it out for itself.
+// The manager is denied outright, and that denial is worth keeping: a tool
+// whose job is answering "should I install this?" must not be able to install
+// it. But the denial is by command name, so it also blocks the harmless
+// read-only queries the analysis genuinely wants. A run was observed spending
+// three turns discovering this before working it out for itself.
 //
-// Saying so up front costs nothing and buys those turns back.
-const dbNote = `
+// Saying so up front costs nothing and buys those turns back. The paths and the
+// read-only tools come from the detected host, because naming pacman's
+// database on a machine that has dpkg is how a brief earns the answer "this
+// isn't an Arch system" instead of an analysis.
+func dbNote() string {
+	h := sources.Host()
+	return fmt.Sprintf(`
 INSPECTING THIS SYSTEM
-pacman is not available to you — it is blocked so that an analysis cannot
-change the machine it is describing. Read the local database directly instead:
+This machine is %s. Its package manager is not available to you — it is
+blocked so that an analysis cannot change the machine it is describing. Read
+the local database directly instead:
 
-  /var/lib/pacman/local/<name>-<version>/desc   installed packages
-  /var/lib/pacman/sync/*.db                     repository metadata (tar)
-
-pactree, uname and expac do work if you need them.
-`
+%s
+`, h.Describe(), h.DBNote)
+}
 
 // Tools denied outright. This is the half that actually constrains.
 //
@@ -152,12 +164,18 @@ pactree, uname and expac do work if you need them.
 // `Bash(git:*)`, and a run was observed executing rm despite the colon form
 // being denied — so which one the CLI honours is not something to assume.
 // Listing both costs nothing; relying on either alone evidently does.
-var disallowedTools = []string{
-	"Edit", "Write", "NotebookEdit",
-	"Bash(sudo:*)", "Bash(sudo *)",
-	"Bash(pacman:*)", "Bash(pacman *)",
-	"Bash(paru:*)", "Bash(paru *)",
-	"Bash(makepkg:*)", "Bash(makepkg *)",
+//
+// The manager binaries come from the detected host. Denying only pacman and
+// paru left apt, dnf and zypper reachable on every machine that has them, so
+// the guarantee this list exists to make held on exactly one distribution.
+func disallowedTools() []string {
+	base := []string{
+		"Edit", "Write", "NotebookEdit",
+		"Bash(sudo:*)", "Bash(sudo *)",
+		"Bash(doas:*)", "Bash(doas *)",
+		"Bash(pkexec:*)", "Bash(pkexec *)",
+	}
+	return append(base, sources.Host().DeniedTools()...)
 }
 
 // Prompt builds the analysis brief.
@@ -168,7 +186,9 @@ var disallowedTools = []string{
 func Prompt(u model.Update, n model.Notes) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "Assess whether this Arch Linux package update is worth installing.\n\n")
+	h := sources.Host()
+	fmt.Fprintf(&b, "Assess whether this package update is worth installing on %s.\n\n",
+		h.Describe())
 	fmt.Fprintf(&b, "PACKAGE\n")
 	fmt.Fprintf(&b, "  name:      %s\n", u.Name)
 	fmt.Fprintf(&b, "  origin:    %s\n", u.Origin)
@@ -201,9 +221,21 @@ func Prompt(u model.Update, n model.Notes) string {
 	// Everything below is computed locally, so the agent spends its budget
 	// judging consequences rather than rediscovering the dependency graph.
 	br := sources.Assess(u)
-	fmt.Fprintf(&b, "\nWHAT DEPENDS ON THIS (from the local database)\n")
-	if len(br.Deps.RequiredBy) == 0 && len(br.Deps.OptionalFor) == 0 {
-		fmt.Fprintf(&b, "  nothing installed depends on it\n")
+	if !br.Known() {
+		// Saying nothing here would be read as "nothing depends on it", which
+		// is a claim this build never checked. The Ubuntu run that prompted
+		// this correctly refused a brief whose dependency section was silently
+		// empty because its pacman queries had returned nothing.
+		fmt.Fprintf(&b, "\nWHAT DEPENDS ON THIS\n")
+		fmt.Fprintf(&b, "  NOT COMPUTED — this tool cannot read the dependency graph on\n")
+		fmt.Fprintf(&b, "  this system. Do not treat that as \"nothing depends on it\".\n")
+		fmt.Fprintf(&b, "  Work it out yourself with the read-only tools listed below, or\n")
+		fmt.Fprintf(&b, "  say plainly that you could not.\n")
+	} else {
+		fmt.Fprintf(&b, "\nWHAT DEPENDS ON THIS (from the local database, via %s)\n", br.Source)
+		if len(br.Deps.RequiredBy) == 0 && len(br.Deps.OptionalFor) == 0 {
+			fmt.Fprintf(&b, "  nothing installed depends on it\n")
+		}
 	}
 	if len(br.Deps.RequiredBy) > 0 {
 		fmt.Fprintf(&b, "  required by:  %s\n", strings.Join(br.Deps.RequiredBy, " "))
@@ -225,6 +257,13 @@ func Prompt(u model.Update, n model.Notes) string {
 			"until it is rebuilt.\n")
 	} else if u.Origin == model.Repo && len(br.Deps.Provides) > 0 {
 		fmt.Fprintf(&b, "  no soname changes: %s\n", strings.Join(br.Deps.Provides, " "))
+	} else if br.Known() && br.Source == "dpkg" {
+		// dpkg encodes the soname in the package name, so a version bump within
+		// one package name cannot move it. Saying so stops a run reaching for
+		// an analysis that does not apply here.
+		fmt.Fprintf(&b, "\n  Soname changes do not arise this way here: the soname is part of\n")
+		fmt.Fprintf(&b, "  the package name, so a move ships as a new package and the solver\n")
+		fmt.Fprintf(&b, "  refuses a partial upgrade. Judge compatibility from the changelog.\n")
 	}
 
 	if len(n.Releases) > 0 {
@@ -244,8 +283,32 @@ func Prompt(u model.Update, n model.Notes) string {
 		fmt.Fprintf(&b, "\nNo upstream release notes: %s (%s)\n", n.Err, n.Source)
 	}
 
-	b.WriteString(dbNote)
-	b.WriteString(`
+	b.WriteString(dbNote())
+
+	// The breakage sentence differs by family because the mechanism does. On
+	// Arch it is a soname moving under packages nothing rebuilds; on Debian and
+	// Fedora the archive carries both sonames and the solver refuses the
+	// partial upgrade, so the risk is elsewhere.
+	breaksNote := "Base this on the dependency data above, not on guesswork."
+	switch h.Family {
+	case sources.Arch:
+		breaksNote = "Base this on the dependency and soname data above, not on " +
+			"guesswork. A soname change with AUR packages linked against it is the " +
+			"case that actually bites; repository packages are rebuilt together and " +
+			"normally are not."
+	case sources.Debian, sources.Fedora, sources.SUSE:
+		breaksNote = "Base this on the dependency data above, not on guesswork. The " +
+			"archive is self-consistent and the solver refuses a partial upgrade, so " +
+			"the cases that actually bite are held packages, third-party repositories " +
+			"pinning an older version, and configuration files you have edited."
+	}
+	breaksNote = wrap(breaksNote, 76, "")
+	pkgRecipe := "the packaging recipe"
+	if h.Family == sources.Arch {
+		pkgRecipe = "the PKGBUILD"
+	}
+
+	fmt.Fprintf(&b, `
 TASK
 Read the actual source diff, not just the release notes.
 
@@ -256,20 +319,18 @@ Reply in GitHub-flavoured Markdown, opening with exactly this shape:
 
 ## <package name> — <what it is, in half a line>
 Two or three sentences of plain English: what this software actually does, and
-what it is doing on a desktop Arch machine. Assume the reader has never heard
-of it and does not know the jargon of its field. No version numbers here, no
-CVEs, no opinion — just what the thing is for.
+what it is doing on this machine, which runs %s. Assume the reader has never
+heard of it and does not know the jargon of its field. No version numbers here,
+no CVEs, no opinion — just what the thing is for.
 
 ## VERDICT: <INSTALL NOW|INSTALL SOON|ROUTINE|WAIT|INVESTIGATE>
 One sentence saying why.
 
 **Breaks:** either the single word NOTHING, or a plain-English list of what
-stops working and what to do about it. Base this on the dependency and soname
-data above, not on guesswork. A soname change with AUR packages linked against
-it is the case that actually bites; repository packages are rebuilt together
-and normally are not.
+stops working and what to do about it. %s
 
-Then, under their own headings:
+Then, under their own headings:`, h.Describe(), breaksNote)
+	b.WriteString(`
 
 1. WHAT CHANGED — the substantive changes, grouped. Ignore version bumps,
    formatting and CI churn.
@@ -278,10 +339,10 @@ Then, under their own headings:
 3. SECURITY IMPACT — does this fix a vulnerability reachable in normal desktop
    use, and is there evidence of active exploitation? Say plainly when a CVE is
    not reachable in this configuration.
-4. SUPPLY-CHAIN CHECK — anything in the diff or PKGBUILD that does not belong:
-   new network calls, new install-time scripts, obfuscated blobs, changed source
-   URLs, new maintainers, added binary artifacts. State explicitly if you find
-   nothing.
+4. SUPPLY-CHAIN CHECK — anything in the diff or ` + pkgRecipe + ` that does not
+   belong: new network calls, new install-time scripts, obfuscated blobs,
+   changed source URLs, new maintainers, added binary artifacts. State
+   explicitly if you find nothing.
 5. REGRESSION RISK — breaking changes, config migrations, known post-release
    bug reports or reverts.
 6. WILL ANYTHING ELSE BREAK — work through the dependency data above. For each
@@ -384,8 +445,9 @@ func SystemEntry(ups []model.Update) model.Update {
 func SystemPrompt(ups []model.Update) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "Assess what happens if this Arch Linux system is fully "+
-		"upgraded right now.\n\n")
+	host := sources.Host()
+	fmt.Fprintf(&b, "Assess what happens if this %s system is fully "+
+		"upgraded right now.\n\n", host.Describe())
 	var repo, aur, fp []model.Update
 	for _, u := range ups {
 		if IsSystem(u) {
@@ -439,7 +501,8 @@ func SystemPrompt(ups []model.Update) string {
 	// its runtimes are coupled to host packages in ways neither manager knows
 	// about — a GL runtime pinned to a host driver version is the usual case.
 	if len(fp) > 0 {
-		fmt.Fprintf(&b, "\nFLATPAK (separate manager; no pacman command touches these)\n")
+		fmt.Fprintf(&b, "\nFLATPAK (separate manager; no system package manager "+
+			"command touches these)\n")
 		for _, u := range fp {
 			fmt.Fprintf(&b, "  %s  installed %s -> commit %s\n", u.Name, u.Cur, u.New)
 		}
@@ -457,8 +520,8 @@ func SystemPrompt(ups []model.Update) string {
 		flagged++
 		switch {
 		case len(u.CVEs) > 0:
-			fmt.Fprintf(&b, "  %s — %s, %d CVEs (Arch tracker)\n",
-				u.Name, u.Severity, len(u.CVEs))
+			fmt.Fprintf(&b, "  %s — %s, %d CVEs (%s)\n",
+				u.Name, u.Severity, len(u.CVEs), trackerName(host))
 		case u.UpstreamCVEs > 0:
 			fmt.Fprintf(&b, "  %s — %d CVEs (vendor release notes)\n",
 				u.Name, u.UpstreamCVEs)
@@ -505,13 +568,47 @@ func SystemPrompt(ups []model.Update) string {
 		fmt.Fprintf(&b, "  %s %s -> %s\n", u.Name, u.Cur, u.New)
 	}
 
-	b.WriteString(dbNote)
-	b.WriteString(`
+	b.WriteString(dbNote())
+
+	// Every family-specific sentence in the task is built here rather than
+	// inlined, so that adding a distribution is one switch instead of a search
+	// through prose for the word "pacman".
+	investigate := "check whether anything in this set is a version jump large " +
+		"enough to carry a breaking change"
+	fallout := "THIRD-PARTY FALLOUT — anything installed outside the distribution " +
+		"archive that this transaction could disturb."
+	if host.ForeignNote != "" {
+		fallout = "WHAT THE UPGRADE DOES NOT REBUILD — " + host.ForeignNote +
+			". Work out which of those this transaction actually puts at risk."
+	}
+	if host.Family == sources.Arch {
+		investigate = "check the news items against the installed packages, and check " +
+			"whether any library in this set is moving its soname under an AUR package"
+		fallout = "AUR AND FLATPAK FALLOUT — which AUR packages are at risk from a " +
+			"repository library moving, and whether any flatpak runtime is pinned to " +
+			"a host package that is changing. These live outside the system package " +
+			"manager, so nothing rebuilds them for you."
+	}
+	afterwards := "reboots, service restarts and anything that will look broken " +
+		"until a step is taken"
+	if host.ConfigConvention != "" {
+		afterwards = "reboots, service restarts, " + host.ConfigConvention +
+			", and anything that will look broken until a step is taken"
+	}
+	// Snapshot tooling is detected rather than assumed. The Arch-only build
+	// asserted that this machine runs snapper with snap-pac, which was true of
+	// exactly one machine.
+	recovery := "the specific recovery path for this transaction"
+	if snap := snapshotNote(host); snap != "" {
+		recovery += ". " + snap
+	}
+
+	fmt.Fprintf(&b, `
 TASK
 Work out what actually happens if this upgrade runs now. Investigate before
-writing: check the news items against the installed packages, and check whether
-any library in this set is moving its soname under an AUR package. You can read
-the local database with pacman -Qi / -Si / -Qmq and pactree.
+writing: %s. Read the local database with the read-only tools listed above.`,
+		wrap(investigate, 74, ""))
+	b.WriteString(`
 
 Reply in GitHub-flavoured Markdown, opening with exactly this shape:
 
@@ -531,24 +628,81 @@ Then, under their own headings:
 
 1. WHAT YOU ARE GETTING — the security content worth having, briefly. Lead with
    anything reachable in normal desktop use.
-2. MANUAL INTERVENTION — for each news item, whether it applies to this machine
-   and what to do. Say plainly when one does not apply.
-3. AUR AND FLATPAK FALLOUT — which AUR packages are at risk from a repository
-   library moving, and whether any flatpak runtime is pinned to a host package
-   that is changing. These live outside pacman, so nothing rebuilds them for
-   you.
-4. AFTERWARDS — reboots, service restarts, .pacnew configuration files, and
-   anything that will look broken until a step is taken. Include anything the
-   upgrade does NOT cover that this transaction puts at risk.
-5. IF IT GOES WRONG — the specific recovery path for this transaction. Note
-   that this machine has snapper with snap-pac, so pacman takes a pre-upgrade
-   snapshot automatically.
-
+2. MANUAL INTERVENTION — any step this transaction demands before or after it
+   runs. Where announcements are listed above, say for each whether it applies
+   to this machine. Say plainly when one does not apply.
+`)
+	// The label is wrapped with the text, not prepended to it, so the first
+	// line is measured including "4. AFTERWARDS — " rather than overrunning by
+	// its length.
+	fmt.Fprintf(&b, "%s\n", wrap("3. "+fallout, 76, "   "))
+	fmt.Fprintf(&b, "%s\n", wrap("4. AFTERWARDS — "+afterwards+
+		". Include anything the upgrade does NOT cover that this transaction "+
+		"puts at risk.", 76, "   "))
+	fmt.Fprintf(&b, "%s\n", wrap("5. IF IT GOES WRONG — "+recovery+".", 76, "   "))
+	b.WriteString(`
 Rules: base every claim on something you actually checked, and say which. Do
 not warn about risks you have not verified apply here — a list of things that
 could theoretically go wrong is noise, and it trains the reader to skip the one
-warning that matters. Be concise.`)
+warning that matters. Never describe a tool or a path you have not confirmed
+exists on this machine. Be concise.`)
 
+	return b.String()
+}
+
+// trackerName names the advisory source behind a CVE list.
+//
+// arch-audit only runs on Arch, so a CVE count elsewhere came from the vendor's
+// own release notes and should not be attributed to the Arch tracker.
+func trackerName(h sources.HostInfo) string {
+	if h.Family == sources.Arch {
+		return "Arch tracker"
+	}
+	return "security tracker"
+}
+
+// snapshotNote reports pre-upgrade rollback tooling that is actually installed.
+//
+// Stated only when detected. A brief that promises a snapshot the machine does
+// not take is worse than saying nothing, because it is read as a safety net.
+func snapshotNote(h sources.HostInfo) string {
+	switch {
+	case h.Family == sources.Arch && sources.HasBin("snapper"):
+		return "This machine has snapper installed, so check for a snap-pac hook " +
+			"in /etc/pacman.d/hooks or /usr/share/libalpm/hooks before promising a " +
+			"pre-upgrade snapshot"
+	case sources.HasBin("timeshift"):
+		return "This machine has timeshift installed; a snapshot is only taken if " +
+			"it is scheduled or run manually"
+	case sources.HasBin("zfs"):
+		return "This machine has ZFS; check whether the root dataset is snapshotted " +
+			"before the upgrade"
+	}
+	return ""
+}
+
+// wrap breaks text at width, indenting every line after the first.
+//
+// The host-specific sentences are assembled at runtime and vary in length by a
+// factor of three, so they cannot be wrapped by hand in the source. A numbered
+// list whose items run to 200 columns is harder to follow, and the brief is
+// read by something trained on text that wraps.
+func wrap(s string, width int, indent string) string {
+	var b strings.Builder
+	col := 0
+	for i, w := range strings.Fields(s) {
+		switch {
+		case i == 0:
+			b.WriteString(w)
+			col = len(w)
+		case col+1+len(w) > width:
+			b.WriteString("\n" + indent + w)
+			col = len(indent) + len(w)
+		default:
+			b.WriteString(" " + w)
+			col += 1 + len(w)
+		}
+	}
 	return b.String()
 }
 
@@ -664,9 +818,9 @@ func Run(ctx context.Context, u model.Update, n model.Notes, allUpdates []model.
 			"--effort", effort,
 		}
 		args = append(args, "--allowed-tools")
-		args = append(args, allowedTools...)
+		args = append(args, allowedTools()...)
 		args = append(args, "--disallowed-tools")
-		args = append(args, disallowedTools...)
+		args = append(args, disallowedTools()...)
 		cmd := exec.CommandContext(ctx, "claude", args...)
 
 		// Run in a scratch directory rather than wherever system-patch happens to
