@@ -1,0 +1,56 @@
+# Release build. Linux only: the tool drives pacman, apt, dnf, flatpak and
+# snap, none of which exist on the other platforms goreleaser would happily
+# cross-compile for.
+version: 2
+project_name: system-patch
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: system-patch
+    main: .
+    binary: system-patch
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    go install github.com/Sousf/system-patch@{{ .Tag }}
+    ```
+
+    Or on Arch: `paru -S system-patch`

@@ -34,6 +34,10 @@ import (
 // anything invalidates the cache regardless of age.
 const cacheTTL = 10 * time.Minute
 
+// version is stamped at build time with -X main.version. Builds that skip it,
+// including `go build` in a checkout, report "dev".
+var version = "dev"
+
 const usage = `system-patch — what is pending, why it was pushed, and whether to take it
 
   system-patch              interactive two-pane browser
@@ -44,6 +48,7 @@ const usage = `system-patch — what is pending, why it was pushed, and whether 
   system-patch analyse <pkg>  send an agent to read the source diff and judge it
   system-patch analyse system   assess upgrading everything, right now
   system-patch prompt <pkg>   print that agent's brief without running it
+  system-patch version        the installed version
 
 Keys inside the interface:
   ↑/↓ or j/k   move            a      analyse the source (A re-runs, ignoring
@@ -93,6 +98,8 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(cmdAnalyse(args[1], true))
+	case "version", "--version":
+		fmt.Println("system-patch", version)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
