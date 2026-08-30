@@ -104,6 +104,24 @@ func simple(origin model.Origin, out string, parse func(string) (string, string,
 	return ups
 }
 
+// repoAndAUR enumerates both halves of an Arch system concurrently.
+//
+// checkupdates syncs a temporary database and paru -Qua queries the AUR RPC;
+// run back to back they were the dominant cold-start cost, and they share
+// nothing. One manager entry owns both, so the concurrency has to live here
+// rather than in ManagerUpdates, which parallelises across entries.
+func repoAndAUR() []model.Update {
+	var (
+		wg        sync.WaitGroup
+		repo, aur []model.Update
+	)
+	wg.Add(2)
+	go func() { defer wg.Done(); repo = RepoUpdates() }()
+	go func() { defer wg.Done(); aur = AURUpdates() }()
+	wg.Wait()
+	return append(repo, aur...)
+}
+
 // registry is every manager system-patch can drive, in upgrade order: system
 // packages first, because everything else may link against them.
 var registry = []Manager{
@@ -112,7 +130,7 @@ var registry = []Manager{
 		Name:     "pacman + AUR",
 		Detect:   bin("paru"),
 		Upgrade:  []string{"paru", "-Syu"},
-		List:     func() []model.Update { return append(RepoUpdates(), AURUpdates()...) },
+		List:     repoAndAUR,
 		Note:     "repository and AUR packages, in one transaction",
 		Verified: true,
 	},
@@ -120,7 +138,7 @@ var registry = []Manager{
 		Name:     "pacman + AUR",
 		Detect:   func() bool { return !has("paru") && has("yay") },
 		Upgrade:  []string{"yay", "-Syu"},
-		List:     func() []model.Update { return append(RepoUpdates(), AURUpdates()...) },
+		List:     repoAndAUR,
 		Note:     "repository and AUR packages, in one transaction",
 		Verified: false,
 	},

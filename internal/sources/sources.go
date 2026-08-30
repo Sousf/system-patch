@@ -314,21 +314,30 @@ func rank(o model.Origin) int {
 
 // Collect gathers every pending update and enriches it.
 func Collect() Result {
-	// The three slow inputs are independent and all I/O bound: checkupdates
-	// syncs a temp database, paru and arch-audit both hit the network.
-	// Serially this is the entire startup cost; concurrently it is the slowest
-	// one alone.
 	// Every manager present on this machine enumerates concurrently, alongside
-	// the security tracker. Which managers those are is decided at runtime, so
-	// this is not an Arch-only tool by construction.
+	// the security tracker and the news feed. Which managers those are is
+	// decided at runtime, so this is not an Arch-only tool by construction.
+	//
+	// Concurrency is per manager, and one manager can still be two commands:
+	// the pacman entry runs checkupdates and then paru -Qua, so on Arch the
+	// cold path is their sum. RepoUpdates and AURUpdates run in parallel
+	// inside that entry for the same reason the managers do.
 	var (
 		wg  sync.WaitGroup
 		ups []model.Update
 		adv map[string]Advisory
 	)
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); ups = ManagerUpdates() }()
 	go func() { defer wg.Done(); adv = Advisories() }()
+	// Warmed here so the interface never fetches it. News is read from a render
+	// function, and a miss there blocked the event loop on an HTTP round trip.
+	go func() { defer wg.Done(); FetchNews() }()
+	// Same reasoning: Unmanaged runs `npm ls -g`, which takes up to a couple of
+	// seconds, and its one uncached call used to land on the UI goroutine the
+	// first time the system row was rendered.
+	wg.Add(1)
+	go func() { defer wg.Done(); Unmanaged() }()
 	wg.Wait()
 
 	res := Result{Updates: ups}

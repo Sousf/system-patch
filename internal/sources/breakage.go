@@ -3,6 +3,7 @@ package sources
 import (
 	"encoding/xml"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Sousf/system-patch/internal/cache"
@@ -178,11 +179,62 @@ func News(limit int) []NewsItem {
 	if !Host().ArchNews {
 		return nil
 	}
-	var items []NewsItem
-	if cache.Get("arch-news", time.Hour, &items) && len(items) > 0 {
+	if items, ok := newsMemo(); ok {
 		return trim(items, limit)
 	}
+	return nil
+}
 
+// FetchNews performs the network half, off the interface's goroutine.
+//
+// Split out because News is called from a render function: a cache miss there
+// blocked Bubble Tea's whole event loop on a 25-second HTTP client, freezing
+// keystrokes and repaints alike, and a cold fetch measured 2.7s on a working
+// connection. Callers that may block run this during collection instead.
+func FetchNews() {
+	if !Host().ArchNews {
+		return
+	}
+	if _, ok := newsMemo(); ok {
+		return
+	}
+	items := fetchNewsFeed()
+	newsMu.Lock()
+	newsCached, newsTried = items, true
+	newsMu.Unlock()
+	if len(items) > 0 {
+		cache.Put("arch-news", items)
+	}
+}
+
+var (
+	newsMu     sync.Mutex
+	newsCached []NewsItem
+	newsTried  bool
+)
+
+// newsMemo answers from memory or the disk cache, never from the network.
+//
+// The in-process copy matters as much as the file: a render pass hit the disk
+// and re-decoded 9KB of JSON on every cursor move, and a failed fetch was
+// never recorded at all, so an offline machine retried the network on every
+// single refresh.
+func newsMemo() ([]NewsItem, bool) {
+	newsMu.Lock()
+	defer newsMu.Unlock()
+	if newsTried {
+		return newsCached, true
+	}
+	var items []NewsItem
+	if cache.Get("arch-news", time.Hour, &items) && len(items) > 0 {
+		newsCached, newsTried = items, true
+		return items, true
+	}
+	return nil, false
+}
+
+func fetchNewsFeed() []NewsItem {
+	var items []NewsItem
 	body, err := cache.FetchText(newsFeed)
 	if err != nil {
 		return nil
@@ -206,10 +258,7 @@ func News(limit int) []NewsItem {
 			Summary: strings.TrimSpace(tagRe.Replace(stripTags(it.Desc))),
 		})
 	}
-	if len(items) > 0 {
-		cache.Put("arch-news", items)
-	}
-	return trim(items, limit)
+	return items
 }
 
 func trim(items []NewsItem, limit int) []NewsItem {

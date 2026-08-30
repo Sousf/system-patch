@@ -282,8 +282,20 @@ func collect() tea.Msg { return collectedMsg(sources.Load(10 * time.Minute)) }
 
 func recollect() tea.Msg { return collectedMsg(sources.Collect()) }
 
+// notesSem bounds how many note fetches are in flight.
+//
+// Each keypress that moves the cursor dispatches its own command, and nothing
+// cancels the fetch for a row already scrolled past, so holding j through a
+// cold list opened one request per package at once. Unauthenticated GitHub
+// allows 60 an hour. The startup enrichment pass already caps itself at six
+// for the same reason; this is the interactive path, which a user can trigger
+// far faster than that one runs.
+var notesSem = make(chan struct{}, 6)
+
 func fetchNotes(u model.Update, refresh bool) tea.Cmd {
 	return func() tea.Msg {
+		notesSem <- struct{}{}
+		defer func() { <-notesSem }()
 		return notesMsg{name: u.Name, notes: adapters.For(u, refresh)}
 	}
 }

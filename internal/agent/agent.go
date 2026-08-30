@@ -893,10 +893,14 @@ func Run(ctx context.Context, u model.Update, n model.Notes, allUpdates []model.
 				for _, c := range e.Message.Content {
 					switch c.Type {
 					case "text":
-						for _, line := range strings.Split(c.Text, "\n") {
-							if !send(Line{Kind: Text, Text: line}) {
-								return
-							}
+						// One message per block, not per line. The interface
+						// re-renders the whole accumulated document through
+						// the Markdown pipeline for every Line it receives, so
+						// splitting a 200-line answer into 200 messages cost
+						// 200 full parses of a growing document to show it
+						// once. Blocks arrive a few per run.
+						if !send(Line{Kind: Text, Text: strings.TrimRight(c.Text, "\n")}) {
+							return
 						}
 					case "tool_use":
 						if !send(Line{Kind: Activity,
