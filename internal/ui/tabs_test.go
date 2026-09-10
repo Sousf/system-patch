@@ -433,3 +433,63 @@ func TestRunningPackagesAreMarkedInTheList(t *testing.T) {
 		t.Errorf("running and idle rows carry the same mark: %q vs %q", alphaMark, betaMark)
 	}
 }
+
+// Starting an analysis must not steal the arrow keys. Pressing a used to focus
+// the right pane, so moving to the next package meant escaping out first, and
+// the first esc also threw away the report.
+func TestAnalyseKeepsYouInTheList(t *testing.T) {
+	pkgs := []model.Update{{Name: "alpha"}, {Name: "beta"}, {Name: "gamma"}}
+	m := New()
+	m.w, m.h = 120, 40
+	m.updates = pkgs
+	m.booting = false
+	m.runs = map[string]*agentRun{"alpha": {running: true, text: "watching alpha"}}
+	m.layout()
+	m.cursor = 0
+	m.syncPane()
+
+	if m.focusRight {
+		t.Fatal("a package with a run should not have taken focus")
+	}
+	// j must still move the cursor rather than scroll the pane.
+	out, _ := m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	got := out.(Model)
+	if got.cursor != 1 {
+		t.Errorf("cursor = %d after j, want 1: the arrow keys were captured", got.cursor)
+	}
+	if u, _ := got.sel(); u.Name != "beta" {
+		t.Errorf("selection = %q, want beta", u.Name)
+	}
+}
+
+// enter opens the pane, esc comes straight back. esc used to step off the
+// analysis first, so it took two presses to regain the list.
+func TestEnterOpensAndEscReturns(t *testing.T) {
+	m := New()
+	m.w, m.h = 120, 40
+	m.updates = []model.Update{{Name: "alpha"}}
+	m.booting = false
+	m.runs = map[string]*agentRun{"alpha": {text: "## VERDICT: ROUTINE\n"}}
+	m.layout()
+	m.cursor = 0
+	m.syncPane()
+
+	out, _ := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = out.(Model)
+	if !m.focusRight {
+		t.Fatal("enter did not focus the right pane")
+	}
+	out, _ = m.onKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = out.(Model)
+	if m.focusRight {
+		t.Error("esc did not return focus to the list")
+	}
+	if m.mode != paneAgent {
+		t.Error("esc threw away the analysis on the way out of the pane")
+	}
+	// A second esc steps off the analysis to the notes.
+	out, _ = m.onKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if out.(Model).mode != paneNotes {
+		t.Error("a second esc should show the notes instead")
+	}
+}

@@ -664,14 +664,18 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc":
-		// One key that always steps back: out of the agent pane, then out of
-		// right-pane focus.
-		if m.mode == paneAgent {
+		// Steps back out of the right pane first, then off the analysis.
+		//
+		// This order matters now that starting a run no longer takes focus:
+		// esc is what you press after enter, and it has to be the exact
+		// inverse of it. Stepping off the analysis first meant one esc lost
+		// the report and a second was needed to get the arrow keys back.
+		if m.focusRight {
+			m.focusRight = false
+		} else if m.mode == paneAgent {
 			m.mode = paneNotes
 			m.refreshPane()
 			m.vp.GotoTop()
-		} else {
-			m.focusRight = false
 		}
 		return m, nil
 
@@ -811,7 +815,6 @@ func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
 	// should do.
 	if r := m.runs[u.Name]; r != nil && r.running && !force {
 		m.mode = paneAgent
-		m.focusRight = true
 		m.refreshPane()
 		return m, nil
 	}
@@ -835,7 +838,6 @@ func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
 			for _, t := range s.Trail {
 				r.out = append(r.out, agent.Line{Kind: agent.Activity, Text: t})
 			}
-			m.focusRight = true
 			m.refreshPane()
 			m.vp.GotoTop()
 			return m, nil
@@ -855,7 +857,6 @@ func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
 	r.ch = ch
 	r.running = true
 	r.start = time.Now()
-	m.focusRight = true
 	m.refreshPane()
 	m.vp.GotoTop()
 	return m, tea.Batch(waitAgent(u.Name, ch), m.sp.Tick)
@@ -1471,11 +1472,11 @@ func (m Model) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
-	keys := "↑↓ move · ←→ manager · a analyse · i install · r reload · R rescan · q quit"
-	if r := m.run(); m.mode == paneAgent && r != nil && r.running {
-		keys = "x cancel · tab scroll · esc back · q quit"
+	keys := "↑↓ move · ←→ manager · a analyse · enter read · i install · R rescan · q quit"
+	if r := m.run(); m.mode == paneAgent && r != nil && r.running && !m.focusRight {
+		keys = "↑↓ move · x cancel · enter read · q quit"
 	} else if m.focusRight {
-		keys = "scrolling right pane · tab back · esc list · q quit"
+		keys = "scrolling right pane · esc back to list · x cancel · q quit"
 	}
 
 	if m.confirming {
