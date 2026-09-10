@@ -72,7 +72,28 @@ type notesMsg struct {
 	name  string
 	notes model.Notes
 }
-type agentMsg agent.Line
+
+// agentMsg is one line from one run. The name is what makes several runs
+// possible: bubbletea delivers every command's message to the same Update, so
+// without it two analyses streaming at once would interleave into whichever
+// pane happened to be open.
+type agentMsg struct {
+	name string
+	line agent.Line
+}
+
+// agentRun is one analysis. Kept per package so pressing a, moving on, and
+// pressing a again leaves both running rather than refusing the second.
+type agentRun struct {
+	out       []agent.Line
+	text      string
+	err       string
+	running   bool
+	fromCache bool
+	ch        <-chan agent.Line
+	cancel    context.CancelFunc
+	start     time.Time
+}
 
 // Model is the bubbletea model.
 type Model struct {
@@ -89,31 +110,67 @@ type Model struct {
 	ready   bool
 	booting bool
 
-	mode         pane
-	focusRight   bool
-	agentFor     string
-	agentOut     []agent.Line
-	agentRunning bool
-	agentErr     string
-	agentCh      <-chan agent.Line
-	agentCancel  context.CancelFunc
-
-	// Markdown accumulated from the agent's prose, kept separate from the
-	// activity trail so it can be rendered as one document.
-	agentText string
-	// True when the pane is showing a stored analysis rather than a live run.
-	fromCache bool
+	mode       pane
+	focusRight bool
+	// runs holds every analysis started this session, keyed by package name.
+	// Several may be running at once; the pane shows the selected package's.
+	runs map[string]*agentRun
 
 	// Tab state: 0 is the combined view, i>0 selects tabOrigins[i-1]. The
 	// cursor indexes the visible (filtered) list, not m.updates.
 	tab        int
 	tabOrigins []model.Origin
 
+	// Survives the rescan an upgrade triggers, which overwrites warnings, so a
+	// failed upgrade is still on screen once the new list lands.
+	upgradeErr string
+
 	// Set while the install confirmation is on screen, holding what y runs.
 	confirming bool
 	plan       installPlan
-	// When the running analysis started, for the elapsed-time readout.
-	agentStart time.Time
+}
+
+// run is the analysis for the selected package, or nil.
+func (m Model) run() *agentRun {
+	u, ok := m.sel()
+	if !ok {
+		return nil
+	}
+	return m.runs[u.Name]
+}
+
+// anyRunning reports whether any analysis is still going, wherever it is.
+func (m Model) anyRunning() bool {
+	for _, r := range m.runs {
+		if r.running {
+			return true
+		}
+	}
+	return false
+}
+
+// runningCount is how many analyses are in flight, for the title.
+func (m Model) runningCount() int {
+	n := 0
+	for _, r := range m.runs {
+		if r.running {
+			n++
+		}
+	}
+	return n
+}
+
+// syncPane points the right pane at whatever the newly selected package has.
+//
+// A package with a run shows it, whether or not that run has finished; one
+// without shows its notes. Without this, moving the cursor off a running
+// analysis and back again lost it.
+func (m *Model) syncPane() {
+	if m.run() != nil {
+		m.mode = paneAgent
+		return
+	}
+	m.mode = paneNotes
 }
 
 // upgradeSteps is every manager the full upgrade has to drive, in order.
@@ -263,6 +320,7 @@ func New() Model {
 	m := Model{
 		notes:   map[string]model.Notes{},
 		loading: map[string]bool{},
+		runs:    map[string]*agentRun{},
 		sp:      sp,
 		booting: true,
 		w:       80,
@@ -303,13 +361,13 @@ func fetchNotes(u model.Update, refresh bool) tea.Cmd {
 // waitAgent pumps one line off the agent's channel per Cmd, re-arming itself
 // until the channel closes. This is how a streaming subprocess is folded into
 // bubbletea's single-threaded update loop without blocking it.
-func waitAgent(ch <-chan agent.Line) tea.Cmd {
+func waitAgent(name string, ch <-chan agent.Line) tea.Cmd {
 	return func() tea.Msg {
 		l, ok := <-ch
 		if !ok {
-			return agentMsg{Done: true}
+			return agentMsg{name: name, line: agent.Line{Done: true}}
 		}
-		return agentMsg(l)
+		return agentMsg{name: name, line: l}
 	}
 }
 
@@ -399,10 +457,11 @@ func (m Model) hasTabs() bool { return len(m.tabOrigins) > 0 }
 // needs the height before it has set the width the banner would be rendered
 // at.
 func (m Model) pinHeight() int {
-	if m.mode != paneAgent || m.agentText == "" {
+	r := m.run()
+	if m.mode != paneAgent || r == nil || r.text == "" {
 		return 0
 	}
-	v, ok := render.FindVerdict(m.agentText)
+	v, ok := render.FindVerdict(r.text)
 	if !ok {
 		return 0
 	}
@@ -421,7 +480,7 @@ func (m Model) pinnedVerdict() string {
 	if m.pinHeight() == 0 {
 		return ""
 	}
-	v, _ := render.FindVerdict(m.agentText)
+	v, _ := render.FindVerdict(m.run().text)
 	out := verdictBanner(v, m.vp.Width)
 	if render.Urgency(v) > 0 {
 		out += "\n" + stDim.Render("  i to install (confirms first)")
@@ -468,7 +527,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case spinner.TickMsg:
-		if m.booting || m.agentRunning || len(m.loading) > 0 {
+		if m.booting || m.anyRunning() || len(m.loading) > 0 {
 			var c tea.Cmd
 			m.sp, c = m.sp.Update(msg)
 			cmds = append(cmds, c)
@@ -479,7 +538,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// screen through every gap between tool calls — precisely the
 			// stretches where the agent is thinking and the reader most needs
 			// to see it is still alive.
-			if m.agentRunning && m.mode == paneAgent {
+			if r := m.run(); r != nil && r.running && m.mode == paneAgent {
 				atBottom := m.vp.AtBottom()
 				m.refreshPane()
 				if atBottom {
@@ -521,24 +580,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case agentMsg:
-		if msg.Kind == agent.Text {
+		r := m.runs[msg.name]
+		if r == nil {
+			break // its run was cleared out from under it
+		}
+		if msg.line.Kind == agent.Text {
 			// Blank text lines are kept: they are the paragraph breaks that
 			// make the Markdown parse as separate blocks.
-			m.agentText += msg.Text + "\n"
-		} else if msg.Text != "" {
-			m.agentOut = append(m.agentOut, agent.Line(msg))
+			r.text += msg.line.Text + "\n"
+		} else if msg.line.Text != "" {
+			r.out = append(r.out, msg.line)
 		}
-		if msg.Done {
-			m.agentRunning = false
-			m.agentCh = nil
-			if msg.Err != nil && msg.Err != context.Canceled {
-				m.agentErr = msg.Err.Error()
+		if msg.line.Done {
+			r.running = false
+			r.ch = nil
+			if msg.line.Err != nil && msg.line.Err != context.Canceled {
+				r.err = msg.line.Err.Error()
 			}
-			m.saveAnalysis()
-		} else if m.agentCh != nil {
-			cmds = append(cmds, waitAgent(m.agentCh))
+			m.saveAnalysis(msg.name)
+		} else if r.ch != nil {
+			cmds = append(cmds, waitAgent(msg.name, r.ch))
 		}
-		if m.mode == paneAgent {
+		// Only the pane actually on screen is re-rendered. A run streaming
+		// behind another package's pane costs nothing to keep filling.
+		sel, selOK := m.sel()
+		if m.mode == paneAgent && selOK && sel.Name == msg.name {
 			atBottom := m.vp.AtBottom()
 			m.refreshPane()
 			// Follow the tail only while the reader is already at the bottom,
@@ -554,9 +620,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// became wrong. Re-enumerate rather than leave the list describing a
 		// system that no longer exists.
 		m.booting = true
-		m.agentErr = ""
+		m.upgradeErr = ""
 		if msg.err != nil {
-			m.agentErr = "upgrade: " + msg.err.Error()
+			m.upgradeErr = "upgrade: " + msg.err.Error()
 		}
 		return m, tea.Batch(recollect, m.sp.Tick)
 
@@ -590,8 +656,10 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q", "ctrl+c":
-		if m.agentCancel != nil {
-			m.agentCancel()
+		for _, r := range m.runs {
+			if r.cancel != nil {
+				r.cancel()
+			}
 		}
 		return m, tea.Quit
 
@@ -617,7 +685,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.cursor < len(m.visible())-1 {
 			m.cursor++
-			m.mode = paneNotes
+			m.syncPane()
 			if cmd := m.ensureNotes(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -632,7 +700,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.cursor > 0 {
 			m.cursor--
-			m.mode = paneNotes
+			m.syncPane()
 			if cmd := m.ensureNotes(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -644,7 +712,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		if !m.focusRight && len(m.visible()) > 0 {
 			m.cursor = 0
-			m.mode = paneNotes
+			m.syncPane()
 			if cmd := m.ensureNotes(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -655,7 +723,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G":
 		if !m.focusRight && len(m.visible()) > 0 {
 			m.cursor = len(m.visible()) - 1
-			m.mode = paneNotes
+			m.syncPane()
 			if cmd := m.ensureNotes(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -704,7 +772,10 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startAgent(true)
 
 	case "i":
-		if m.agentRunning {
+		// Upgrading moves the system under every running analysis, so the
+		// answers they are still deriving would describe a machine that no
+		// longer exists.
+		if m.anyRunning() {
 			return m, nil
 		}
 		m.plan = m.installPlan()
@@ -712,8 +783,10 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "x":
-		if m.agentRunning && m.agentCancel != nil {
-			m.agentCancel()
+		// Cancels the selected package's run, not every run: with several in
+		// flight, one key that killed all of them would be a trap.
+		if r := m.run(); r != nil && r.running && r.cancel != nil {
+			r.cancel()
 		}
 		return m, nil
 	}
@@ -731,29 +804,36 @@ func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if m.agentRunning {
-		// Refuse rather than queue: two analyses interleaving into one output
-		// pane would be unreadable, and the running one is usually the one
-		// wanted.
+
+	// Already running: show it rather than starting a second copy of the same
+	// analysis. A concurrent tool still has no reason to pay twice for one
+	// answer, and this is what pressing a on a package you already started
+	// should do.
+	if r := m.runs[u.Name]; r != nil && r.running && !force {
+		m.mode = paneAgent
+		m.focusRight = true
+		m.refreshPane()
 		return m, nil
 	}
+	// A forced re-run replaces whatever was there, so the old process has to
+	// go or it keeps streaming into the record its replacement now owns.
+	if r := m.runs[u.Name]; r != nil && r.running && r.cancel != nil {
+		r.cancel()
+	}
 
+	r := &agentRun{}
+	m.runs[u.Name] = r
 	m.mode = paneAgent
-	m.agentFor = u.Name
-	m.agentErr = ""
-	m.agentOut = nil
-	m.agentText = ""
-	m.fromCache = false
 
 	// A stored analysis for these exact versions is shown rather than
 	// re-derived. The run costs real money and the answer cannot have changed
 	// while both version numbers stayed the same.
 	if !force {
 		if s, hit := agent.LoadStored(u); hit {
-			m.agentText = s.Text
-			m.fromCache = true
+			r.text = s.Text
+			r.fromCache = true
 			for _, t := range s.Trail {
-				m.agentOut = append(m.agentOut, agent.Line{Kind: agent.Activity, Text: t})
+				r.out = append(r.out, agent.Line{Kind: agent.Activity, Text: t})
 			}
 			m.focusRight = true
 			m.refreshPane()
@@ -763,7 +843,7 @@ func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
 	}
 
 	if !agent.Available() {
-		m.agentErr = "claude CLI not found on PATH"
+		r.err = "claude CLI not found on PATH"
 		m.refreshPane()
 		return m, nil
 	}
@@ -771,24 +851,38 @@ func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := agent.Run(ctx, u, m.notes[u.Name], m.updates)
 
-	m.agentCancel = cancel
-	m.agentCh = ch
-	m.agentRunning = true
-	m.agentStart = time.Now()
+	r.cancel = cancel
+	r.ch = ch
+	r.running = true
+	r.start = time.Now()
 	m.focusRight = true
 	m.refreshPane()
 	m.vp.GotoTop()
-	return m, tea.Batch(waitAgent(ch), m.sp.Tick)
+	return m, tea.Batch(waitAgent(u.Name, ch), m.sp.Tick)
 }
 
 // saveAnalysis stores a finished run so reopening it is free.
-func (m *Model) saveAnalysis() {
-	u, ok := m.sel()
-	if !ok || u.Name != m.agentFor || strings.TrimSpace(m.agentText) == "" {
+//
+// Takes the name rather than reading the selection, because the run that just
+// finished is usually not the one on screen any more.
+func (m *Model) saveAnalysis(name string) {
+	r := m.runs[name]
+	if r == nil || strings.TrimSpace(r.text) == "" {
 		return
 	}
-	s := agent.Stored{Text: m.agentText}
-	for _, l := range m.agentOut {
+	var u model.Update
+	found := false
+	for _, c := range m.updates {
+		if c.Name == name {
+			u, found = c, true
+			break
+		}
+	}
+	if !found {
+		return
+	}
+	s := agent.Stored{Text: r.text}
+	for _, l := range r.out {
 		if l.Kind == agent.Activity {
 			s.Trail = append(s.Trail, l.Text)
 		}
@@ -877,10 +971,17 @@ func (m Model) renderList(w int) string {
 	rows := m.visible()
 	for i := top; i < len(rows) && i < top+vis; i++ {
 		u := rows[i]
+		// A running analysis takes over the badge. With several in flight the
+		// title says how many but not which, and the badge is the only place
+		// the list can answer that without a third line per row.
+		mark := badge(u)
+		if r := m.runs[u.Name]; r != nil && r.running {
+			mark = m.sp.View()
+		}
 		// Prefix is two cells of cursor plus badge and a space.
-		line := "  " + badge(u) + " " + truncate(u.Name, avail-4)
+		line := "  " + mark + " " + truncate(u.Name, avail-4)
 		if i == m.cursor {
-			line = stSel.Render("❯ ") + badge(u) + " " +
+			line = stSel.Render("❯ ") + mark + " " +
 				stSel.Render(truncate(u.Name, avail-4))
 		}
 		b.WriteString(line + "\n")
@@ -1182,28 +1283,38 @@ func (m Model) renderSystem() string {
 
 func (m Model) renderAgent() string {
 	var b strings.Builder
+	u, ok := m.sel()
+	r := m.run()
+	if !ok || r == nil {
+		return stDim.Render("no analysis for this package")
+	}
 
-	fmt.Fprintf(&b, "%s %s", stMauve.Render("agent ·"), stBold.Render(m.agentFor))
-	if m.fromCache {
+	fmt.Fprintf(&b, "%s %s", stMauve.Render("agent ·"), stBold.Render(u.Name))
+	if r.fromCache {
 		fmt.Fprintf(&b, "  %s", stDim.Render("(stored — A to re-run)"))
+	}
+	// What else is in flight, so leaving a run to check another does not mean
+	// losing track of it.
+	if n := m.runningCount(); n > 0 && !(n == 1 && r.running) {
+		fmt.Fprintf(&b, "  %s", stDim.Render(fmt.Sprintf("(%d running)", n)))
 	}
 	b.WriteString("\n")
 
-	if m.agentRunning {
+	if r.running {
 		// Elapsed seconds alongside the spinner. A spinner only proves the
 		// interface is repainting; a climbing clock proves the run itself is
 		// still going, which is the question during a two-minute silence.
-		el := time.Since(m.agentStart).Round(time.Second)
+		el := time.Since(r.start).Round(time.Second)
 		fmt.Fprintf(&b, "%s\n", m.sp.View()+stDim.Render(fmt.Sprintf(
 			" reading the source diff · %s · %d steps · x to cancel",
-			el, len(m.agentOut))))
+			el, len(r.out))))
 	}
-	if m.agentErr != "" {
-		fmt.Fprintf(&b, "%s %s\n", stRed.Render("error:"), m.agentErr)
+	if r.err != "" {
+		fmt.Fprintf(&b, "%s %s\n", stRed.Render("error:"), r.err)
 	}
 	b.WriteString("\n")
 
-	if m.agentText == "" && len(m.agentOut) == 0 && !m.agentRunning && m.agentErr == "" {
+	if r.text == "" && len(r.out) == 0 && !r.running && r.err == "" {
 		return b.String() + stDim.Render("no output")
 	}
 
@@ -1211,7 +1322,7 @@ func (m Model) renderAgent() string {
 	// leads. Once the analysis has landed the trail becomes evidence rather
 	// than news, and the document takes the top.
 	trail := func() {
-		for _, l := range m.agentOut {
+		for _, l := range r.out {
 			if l.Kind != agent.Activity {
 				continue
 			}
@@ -1219,27 +1330,22 @@ func (m Model) renderAgent() string {
 		}
 	}
 
-	if m.agentRunning || m.agentText == "" {
+	if r.running || r.text == "" {
 		trail()
-		if m.agentText != "" {
-			b.WriteString("\n" + render.Markdown(render.Document(m.agentText), m.vp.Width))
+		if r.text != "" {
+			b.WriteString("\n" + render.Markdown(render.Document(r.text), m.vp.Width))
 		}
 		return b.String()
 	}
 
-	b.WriteString(render.Markdown(render.Document(m.agentText), m.vp.Width))
-	if len(m.agentOut) > 0 {
+	b.WriteString(render.Markdown(render.Document(r.text), m.vp.Width))
+	if len(r.out) > 0 {
 		b.WriteString("\n\n" + stDim.Render("  ── what it read ──") + "\n")
 		trail()
 	}
 	return b.String()
 }
 
-// counts totals the pending updates and how many are flagged.
-//
-// The synthetic whole-system row is not a package and is excluded from both.
-// Counting it made the title read one higher than the tab bar, which totals
-// the same set without it: 16 updates above, 15 across the tabs.
 func counts(ups []model.Update) (pending, flagged int) {
 	for _, u := range ups {
 		if agent.IsSystem(u) {
@@ -1342,6 +1448,14 @@ func (m Model) View() string {
 	if flagged > 0 {
 		sub += stRed.Render(fmt.Sprintf(" · %d flagged", flagged))
 	}
+	// Analyses run concurrently, so the count is the only place that says how
+	// many are still going once you have moved off them.
+	if n := m.runningCount(); n > 0 {
+		sub += stMauve.Render(fmt.Sprintf(" · %d analysing", n))
+	}
+	if m.upgradeErr != "" {
+		sub += stRed.Render(" · " + m.upgradeErr)
+	}
 	for _, w := range m.warnings {
 		sub += stYellow.Render(" · " + w)
 	}
@@ -1358,7 +1472,7 @@ func (m Model) View() string {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
 	keys := "↑↓ move · ←→ manager · a analyse · i install · r reload · R rescan · q quit"
-	if m.mode == paneAgent && m.agentRunning {
+	if r := m.run(); m.mode == paneAgent && r != nil && r.running {
 		keys = "x cancel · tab scroll · esc back · q quit"
 	} else if m.focusRight {
 		keys = "scrolling right pane · tab back · esc list · q quit"

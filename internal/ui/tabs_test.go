@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Sousf/system-patch/internal/agent"
@@ -204,7 +205,11 @@ func TestViewportHeightLeavesRoomForChrome(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			m := &Model{w: 120, h: h, tabOrigins: c.origins, agentText: c.text, mode: c.mode}
+			m := &Model{w: 120, h: h, tabOrigins: c.origins, mode: c.mode,
+				runs: map[string]*agentRun{}, updates: []model.Update{{Name: "p"}}}
+			if c.text != "" {
+				m.runs["p"] = &agentRun{text: c.text}
+			}
 			m.layout()
 			if m.vp.Height != c.want {
 				t.Errorf("viewport height = %d, want %d", m.vp.Height, c.want)
@@ -257,7 +262,10 @@ func TestRepoTabTakesTheFamilyManagerName(t *testing.T) {
 // viewport rather than at the top of its content.
 func TestVerdictIsPinnedOutsideTheViewport(t *testing.T) {
 	m := &Model{w: 120, h: 40, mode: paneAgent,
-		agentText: "## thing\n\n## VERDICT: INSTALL NOW\n\nbody\n"}
+		updates: []model.Update{{Name: "p"}},
+		runs: map[string]*agentRun{
+			"p": {text: "## thing\n\n## VERDICT: INSTALL NOW\n\nbody\n"},
+		}}
 	m.layout()
 	if m.pinnedVerdict() == "" {
 		t.Fatal("no pinned verdict for a document that states one")
@@ -271,5 +279,157 @@ func TestVerdictIsPinnedOutsideTheViewport(t *testing.T) {
 	m.vp.GotoBottom()
 	if !strings.Contains(m.View(), "INSTALL NOW") {
 		t.Error("verdict lost once the pane is scrolled to the bottom")
+	}
+}
+
+// noANSI drops styling so an assertion about content is not defeated by
+// glamour colouring each word separately.
+func noANSI(s string) string {
+	var b strings.Builder
+	skip := false
+	for _, r := range s {
+		switch {
+		case r == 0x1b:
+			skip = true
+		case skip && (r == 'm' || r == 'K' || r == 'H'):
+			skip = false
+		case !skip:
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// Two analyses at once. Pressing a, moving on, and pressing a again used to
+// refuse the second run outright; both must now stream, and moving between
+// them must show each one's own output.
+func TestConcurrentRunsAreIndependent(t *testing.T) {
+	pkgs := []model.Update{{Name: "alpha"}, {Name: "beta"}}
+	m := &Model{
+		w: 120, h: 40, mode: paneAgent,
+		updates: pkgs,
+		notes:   map[string]model.Notes{},
+		loading: map[string]bool{},
+		runs: map[string]*agentRun{
+			"alpha": {running: true, text: "alpha body\n"},
+			"beta":  {running: true, text: "beta body\n"},
+		},
+	}
+	m.layout()
+
+	if n := m.runningCount(); n != 2 {
+		t.Fatalf("runningCount = %d, want 2", n)
+	}
+	if !m.anyRunning() {
+		t.Error("anyRunning is false with two runs in flight")
+	}
+
+	m.cursor = 0
+	if got := noANSI(m.renderAgent()); !strings.Contains(got, "alpha body") ||
+		strings.Contains(got, "beta body") {
+		t.Errorf("the pane for alpha showed the wrong run: %q", got)
+	}
+	m.cursor = 1
+	if got := noANSI(m.renderAgent()); !strings.Contains(got, "beta body") ||
+		strings.Contains(got, "alpha body") {
+		t.Errorf("the pane for beta showed the wrong run: %q", got)
+	}
+}
+
+// A line arriving for a run that is not on screen must land in that run's
+// record rather than the visible one.
+func TestOutputRoutesToItsOwnRun(t *testing.T) {
+	m := Model{
+		updates: []model.Update{{Name: "alpha"}, {Name: "beta"}},
+		notes:   map[string]model.Notes{},
+		loading: map[string]bool{},
+		runs: map[string]*agentRun{
+			"alpha": {running: true},
+			"beta":  {running: true},
+		},
+		w: 120, h: 40, mode: paneAgent,
+	}
+	m.layout()
+	m.cursor = 0 // watching alpha
+
+	out, _ := m.Update(agentMsg{name: "beta", line: agent.Line{Kind: agent.Text, Text: "from beta"}})
+	got := out.(Model)
+	if strings.Contains(got.runs["alpha"].text, "from beta") {
+		t.Error("beta's output landed in alpha's record")
+	}
+	if !strings.Contains(got.runs["beta"].text, "from beta") {
+		t.Error("beta's output never reached beta")
+	}
+}
+
+// Moving the cursor onto a package with a run shows it; onto one without shows
+// its notes. Without this, stepping away from a running analysis lost it.
+func TestSelectionFollowsTheRun(t *testing.T) {
+	m := &Model{
+		updates: []model.Update{{Name: "alpha"}, {Name: "beta"}},
+		runs:    map[string]*agentRun{"beta": {running: true}},
+		w:       120, h: 40,
+	}
+	m.layout()
+	m.cursor = 0
+	m.syncPane()
+	if m.mode != paneNotes {
+		t.Error("a package with no run should show its notes")
+	}
+	m.cursor = 1
+	m.syncPane()
+	if m.mode != paneAgent {
+		t.Error("a package with a run should show it")
+	}
+}
+
+// x cancels the selected run only. With several in flight, one key killing all
+// of them would be a trap.
+func TestCancelOnlyTouchesTheSelectedRun(t *testing.T) {
+	cancelled := map[string]bool{}
+	m := &Model{
+		updates: []model.Update{{Name: "alpha"}, {Name: "beta"}},
+		notes:   map[string]model.Notes{},
+		loading: map[string]bool{},
+		runs: map[string]*agentRun{
+			"alpha": {running: true, cancel: func() { cancelled["alpha"] = true }},
+			"beta":  {running: true, cancel: func() { cancelled["beta"] = true }},
+		},
+		w: 120, h: 40,
+	}
+	m.layout()
+	m.cursor = 1 // beta selected
+	m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cancelled["alpha"] {
+		t.Error("cancelling beta also cancelled alpha")
+	}
+	if !cancelled["beta"] {
+		t.Error("the selected run was not cancelled")
+	}
+}
+
+// The list marks which packages are being analysed. The title says how many
+// runs are in flight but not which, and with several going that is the thing
+// you need to see.
+func TestRunningPackagesAreMarkedInTheList(t *testing.T) {
+	pkgs := []model.Update{{Name: "alpha"}, {Name: "beta"}}
+	m := New()
+	m.w, m.h = 120, 40
+	m.updates = pkgs
+	m.booting = false
+	m.runs = map[string]*agentRun{"beta": {running: true}}
+	m.layout()
+
+	list := noANSI(m.renderList(m.leftWidth()))
+	if !strings.Contains(list, "alpha") || !strings.Contains(list, "beta") {
+		t.Fatalf("list is missing rows: %q", list)
+	}
+	// The idle package keeps its badge; the running one shows the spinner, so
+	// the two rows must not carry the same mark.
+	alphaMark := strings.SplitN(strings.TrimSpace(list), "alpha", 2)[0]
+	betaMark := strings.SplitN(list, "beta", 2)[0]
+	betaMark = betaMark[strings.LastIndex(betaMark, "\n")+1:]
+	if strings.TrimSpace(alphaMark) == strings.TrimSpace(betaMark) {
+		t.Errorf("running and idle rows carry the same mark: %q vs %q", alphaMark, betaMark)
 	}
 }
