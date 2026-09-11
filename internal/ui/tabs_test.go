@@ -493,3 +493,180 @@ func TestEnterOpensAndEscReturns(t *testing.T) {
 		t.Error("a second esc should show the notes instead")
 	}
 }
+
+// i installs whatever the state of the analyses. It refused silently while any
+// run was going, which was survivable with one analysis at a time and became a
+// dead key once several could run at once.
+func TestInstallWorksWhileAnalysesRun(t *testing.T) {
+	cases := []struct {
+		name  string
+		runs  map[string]*agentRun
+		focus bool
+	}{
+		{"no runs, list focused", map[string]*agentRun{}, false},
+		{"no runs, pane focused", map[string]*agentRun{}, true},
+		{"one running", map[string]*agentRun{"alpha": {running: true}}, false},
+		{"one running, pane focused", map[string]*agentRun{"alpha": {running: true}}, true},
+		{"two running", map[string]*agentRun{
+			"alpha": {running: true}, "beta": {running: true}}, false},
+		{"one finished", map[string]*agentRun{"alpha": {text: "done"}}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := New()
+			m.w, m.h = 120, 40
+			m.updates = []model.Update{{Name: "alpha", Origin: model.AUR}}
+			m.booting = false
+			m.runs = c.runs
+			m.focusRight = c.focus
+			m.layout()
+			m.cursor = 0
+
+			out, _ := m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+			got := out.(Model)
+			if !got.confirming {
+				t.Fatal("i did not open the install confirmation")
+			}
+			if got.plan.label == "" {
+				t.Error("the confirmation names no command")
+			}
+			// With runs in flight the confirmation has to say so.
+			if got.runningCount() > 0 && !strings.Contains(noANSI(got.View()), "analysing") {
+				t.Error("the confirmation does not mention the running analyses")
+			}
+		})
+	}
+}
+
+// Every key the help line offers has to work in the state it is offered in.
+func TestHelpLineOffersInstallEverywhere(t *testing.T) {
+	for _, focus := range []bool{false, true} {
+		m := New()
+		m.w, m.h = 120, 40
+		m.updates = []model.Update{{Name: "alpha", Origin: model.AUR}}
+		m.booting = false
+		m.runs = map[string]*agentRun{"alpha": {running: true}}
+		m.focusRight = focus
+		m.layout()
+		m.cursor = 0
+		m.syncPane()
+		if help := noANSI(m.View()); !strings.Contains(help, "i install") {
+			t.Errorf("focusRight=%v: help line does not offer i install", focus)
+		}
+	}
+}
+
+// space gathers rows; a and i then act on the set instead of the cursor.
+func TestMarkedRowsDriveActions(t *testing.T) {
+	pkgs := []model.Update{
+		{Name: "alpha", Origin: model.AUR},
+		{Name: "beta", Origin: model.AUR},
+		{Name: "gamma", Origin: model.AUR},
+	}
+	m := New()
+	m.w, m.h = 120, 40
+	m.updates = pkgs
+	m.booting = false
+	m.layout()
+
+	space := func(m Model) Model {
+		out, _ := m.onKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+		return out.(Model)
+	}
+	m.cursor = 0
+	m = space(m)
+	m.cursor = 2
+	m = space(m)
+
+	if len(m.marked) != 2 || !m.marked["alpha"] || !m.marked["gamma"] {
+		t.Fatalf("marks = %v, want alpha and gamma", m.marked)
+	}
+	// targets is the set, not the cursor.
+	got := m.targets()
+	if len(got) != 2 || got[0].Name != "alpha" || got[1].Name != "gamma" {
+		t.Fatalf("targets = %v, want alpha and gamma", got)
+	}
+	// The plan covers both, chained.
+	plan := m.installPlan()
+	if !strings.Contains(plan.label, "alpha") || !strings.Contains(plan.label, "gamma") {
+		t.Errorf("plan label = %q, want both packages", plan.label)
+	}
+	if strings.Contains(plan.label, "beta") {
+		t.Errorf("plan label = %q, includes an unmarked package", plan.label)
+	}
+	// space again unmarks.
+	m.cursor = 0
+	m = space(m)
+	if m.marked["alpha"] {
+		t.Error("space did not unmark a marked row")
+	}
+}
+
+// With nothing marked the actions fall back to the cursor, which is how the
+// tool worked before marking existed.
+func TestUnmarkedFallsBackToTheCursor(t *testing.T) {
+	m := New()
+	m.w, m.h = 120, 40
+	m.updates = []model.Update{{Name: "alpha", Origin: model.AUR}, {Name: "beta", Origin: model.AUR}}
+	m.booting = false
+	m.layout()
+	m.cursor = 1
+	got := m.targets()
+	if len(got) != 1 || got[0].Name != "beta" {
+		t.Fatalf("targets = %v, want just the selected row", got)
+	}
+	if l := m.installPlan().label; !strings.Contains(l, "beta") || strings.Contains(l, "alpha") {
+		t.Errorf("plan = %q, want only the selected package", l)
+	}
+}
+
+// One repository package in the set widens the whole thing, because there is
+// no safe way to install one repo package on its own.
+func TestRepoPackageWidensABatch(t *testing.T) {
+	ups := []model.Update{
+		{Name: "alpha", Origin: model.AUR},
+		{Name: "libvpx", Origin: model.Repo},
+	}
+	plan := planFor(ups)
+	if !plan.full {
+		t.Error("a batch containing a repository package did not widen to the full upgrade")
+	}
+	if !strings.Contains(plan.why, "libvpx") {
+		t.Errorf("why = %q, does not name the row that forced it", plan.why)
+	}
+}
+
+// Marks are spent by the action that uses them, or the next press repeats the
+// batch rather than acting on the cursor.
+func TestMarksClearAfterInstall(t *testing.T) {
+	m := New()
+	m.w, m.h = 120, 40
+	m.updates = []model.Update{{Name: "alpha", Origin: model.AUR}}
+	m.booting = false
+	m.marked = map[string]bool{"alpha": true}
+	m.layout()
+
+	out, _ := m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	m = out.(Model)
+	if !m.confirming {
+		t.Fatal("i did not open the confirmation")
+	}
+	out, _ = m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if n := len(out.(Model).marked); n != 0 {
+		t.Errorf("%d marks survived the install they drove", n)
+	}
+}
+
+// c clears the whole selection, since unmarking a dozen rows one at a time is
+// not a way to change your mind.
+func TestClearKeyDropsEveryMark(t *testing.T) {
+	m := New()
+	m.updates = []model.Update{{Name: "alpha"}, {Name: "beta"}}
+	m.marked = map[string]bool{"alpha": true, "beta": true}
+	m.w, m.h = 120, 40
+	m.layout()
+	out, _ := m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if n := len(out.(Model).marked); n != 0 {
+		t.Errorf("%d marks survived c", n)
+	}
+}

@@ -112,6 +112,9 @@ type Model struct {
 
 	mode       pane
 	focusRight bool
+	// marked is the multi-selection: space toggles a row into it, and a and i
+	// then act on every member instead of on the cursor.
+	marked map[string]bool
 	// runs holds every analysis started this session, keyed by package name.
 	// Several may be running at once; the pane shows the selected package's.
 	runs map[string]*agentRun
@@ -128,6 +131,27 @@ type Model struct {
 	// Set while the install confirmation is on screen, holding what y runs.
 	confirming bool
 	plan       installPlan
+}
+
+// targets is what an action applies to: every marked row, or the selected one
+// when nothing is marked.
+//
+// Marks survive cursor movement and tab switches, so the set is read back out
+// of m.updates rather than out of the visible slice.
+func (m Model) targets() []model.Update {
+	if len(m.marked) == 0 {
+		if u, ok := m.sel(); ok {
+			return []model.Update{u}
+		}
+		return nil
+	}
+	var out []model.Update
+	for _, u := range m.updates {
+		if m.marked[u.Name] {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // run is the analysis for the selected package, or nil.
@@ -258,48 +282,75 @@ type installPlan struct {
 }
 
 func (m *Model) installPlan() installPlan {
-	u, ok := m.sel()
-	if !ok || agent.IsSystem(u) {
+	return planFor(m.targets())
+}
+
+// planFor is what the install key will run for a set of rows.
+//
+// One repository package among them decides the whole plan: there is no safe
+// single-package path for those, so the transaction widens to the full upgrade
+// and the confirmation says which row forced it. Everything else composes,
+// since AUR, flatpak and snap each update one package without touching the
+// others.
+func planFor(ups []model.Update) installPlan {
+	if len(ups) == 0 {
 		return installPlan{argv: upgradeCmd(), label: upgradeLabel(), full: true}
 	}
-	switch u.Origin {
-	case model.AUR:
-		return installPlan{
-			argv:  []string{"paru", "-S", u.Name},
-			label: "paru -S " + u.Name,
+
+	var argvs [][]string
+	var labels []string
+	for _, u := range ups {
+		if agent.IsSystem(u) {
+			return installPlan{argv: upgradeCmd(), label: upgradeLabel(), full: true}
 		}
-	case model.Flatpak:
-		// The row is app/branch; flatpak addresses updates by application id
-		// and updates every installed branch of it, which is what you want —
-		// two branches of one runtime deliberately move together.
-		app, _, _ := strings.Cut(u.Name, "/")
-		return installPlan{
-			argv:  []string{"flatpak", "update", app},
-			label: "flatpak update " + app,
-		}
-	case model.Snap:
-		return installPlan{
-			argv:  []string{"sudo", "snap", "refresh", u.Name},
-			label: "sudo snap refresh " + u.Name,
+		switch u.Origin {
+		case model.AUR:
+			argvs = append(argvs, []string{"paru", "-S", u.Name})
+			labels = append(labels, "paru -S "+u.Name)
+		case model.Flatpak:
+			// The row is app/branch; flatpak addresses updates by application
+			// id and updates every installed branch of it, which is what you
+			// want — two branches of one runtime deliberately move together.
+			app, _, _ := strings.Cut(u.Name, "/")
+			argvs = append(argvs, []string{"flatpak", "update", app})
+			labels = append(labels, "flatpak update "+app)
+		case model.Snap:
+			argvs = append(argvs, []string{"sudo", "snap", "refresh", u.Name})
+			labels = append(labels, "sudo snap refresh "+u.Name)
+		default:
+			why := u.Name + " is a repository package, and one repo package " +
+				"cannot be safely installed alone (partial upgrade)"
+			if len(ups) > 1 {
+				why = u.Name + " is a repository package, so the whole " +
+					"selection widens to the full upgrade (no safe partial)"
+			}
+			return installPlan{
+				argv:  upgradeCmd(),
+				label: upgradeLabel(),
+				full:  true,
+				why:   why,
+			}
 		}
 	}
+
+	if len(argvs) == 1 {
+		return installPlan{argv: argvs[0], label: labels[0]}
+	}
+	// Chained with && for the reason the full upgrade is: aborting one
+	// confirmation is a decision, and running the rest anyway would ignore it.
+	parts := make([]string, 0, len(argvs))
+	for _, a := range argvs {
+		parts = append(parts, shellJoin(a))
+	}
 	return installPlan{
-		argv:  upgradeCmd(),
-		label: upgradeLabel(),
-		full:  true,
-		why: u.Name + " is a repository package, and one repo package cannot " +
-			"be safely installed alone (partial upgrade)",
+		argv:  []string{"sh", "-c", strings.Join(parts, " && ")},
+		label: strings.Join(labels, " && "),
 	}
 }
 
 type upgradeDoneMsg struct{ err error }
 
 // runUpgrade hands the terminal to the package manager.
-//
-// tea.ExecProcess suspends the interface for the duration: the upgrade needs a
-// real terminal for the sudo password and for pacman's own conflict and
-// replacement prompts. Answering those blind through a captured pipe is how
-// people confirm things they did not read.
 func runUpgrade(argv []string) tea.Cmd {
 	c := exec.Command(argv[0], argv[1:]...)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
@@ -321,6 +372,7 @@ func New() Model {
 		notes:   map[string]model.Notes{},
 		loading: map[string]bool{},
 		runs:    map[string]*agentRun{},
+		marked:  map[string]bool{},
 		sp:      sp,
 		booting: true,
 		w:       80,
@@ -647,6 +699,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y":
 			m.confirming = false
+			m.marked = map[string]bool{}
 			return m, runUpgrade(m.plan.argv)
 		default:
 			m.confirming = false
@@ -750,6 +803,25 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.notes = map[string]model.Notes{}
 		return m, tea.Batch(recollect, m.sp.Tick)
 
+	case " ":
+		// Marks survive movement, so several rows can be gathered before any
+		// action is taken. The whole-system row is not a package and cannot
+		// join a set of them.
+		if u, ok := m.sel(); ok && !agent.IsSystem(u) {
+			if m.marked[u.Name] {
+				delete(m.marked, u.Name)
+			} else {
+				m.marked[u.Name] = true
+			}
+		}
+		return m, nil
+
+	case "c":
+		// Clears the whole selection, since unmarking a dozen rows one key at
+		// a time is not a way to change your mind.
+		m.marked = map[string]bool{}
+		return m, nil
+
 	case "enter":
 		// Deliberately not the analyse key. Enter is the most-pressed key in
 		// any list, and an agent run costs minutes and real tokens; that
@@ -776,12 +848,12 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startAgent(true)
 
 	case "i":
-		// Upgrading moves the system under every running analysis, so the
-		// answers they are still deriving would describe a machine that no
-		// longer exists.
-		if m.anyRunning() {
-			return m, nil
-		}
+		// Installs whatever is selected, even with analyses in flight. It
+		// refused silently while any run was going, which was survivable with
+		// one analysis at a time and became a dead key the moment several
+		// could be. An upgrade does leave a running analysis describing the
+		// versions it started with, so the confirmation says so and the
+		// decision stays the reader's.
 		m.plan = m.installPlan()
 		m.confirming = true
 		return m, nil
@@ -804,19 +876,38 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
-	u, ok := m.sel()
-	if !ok {
+	ups := m.targets()
+	if len(ups) == 0 {
 		return m, nil
 	}
+	var cmds []tea.Cmd
+	for _, u := range ups {
+		if c := m.startOne(u, force); c != nil {
+			cmds = append(cmds, c)
+		}
+	}
+	// The marks have been spent. Leaving them set would make the next a
+	// re-run the same batch, which is not what a second press means.
+	if len(m.marked) > 0 {
+		m.marked = map[string]bool{}
+	}
+	m.syncPane()
+	m.refreshPane()
+	if len(cmds) == 0 {
+		return m, nil
+	}
+	return m, tea.Batch(append(cmds, m.sp.Tick)...)
+}
 
-	// Already running: show it rather than starting a second copy of the same
-	// analysis. A concurrent tool still has no reason to pay twice for one
-	// answer, and this is what pressing a on a package you already started
-	// should do.
+// startOne begins or reveals the analysis for one package, returning the
+// command that pumps its output, or nil when there is nothing to pump.
+func (m *Model) startOne(u model.Update, force bool) tea.Cmd {
+	// Already running: leave it alone rather than starting a second copy of
+	// the same analysis. A concurrent tool still has no reason to pay twice
+	// for one answer.
 	if r := m.runs[u.Name]; r != nil && r.running && !force {
 		m.mode = paneAgent
-		m.refreshPane()
-		return m, nil
+		return nil
 	}
 	// A forced re-run replaces whatever was there, so the old process has to
 	// go or it keeps streaming into the record its replacement now owns.
@@ -838,28 +929,22 @@ func (m Model) startAgent(force bool) (tea.Model, tea.Cmd) {
 			for _, t := range s.Trail {
 				r.out = append(r.out, agent.Line{Kind: agent.Activity, Text: t})
 			}
-			m.refreshPane()
-			m.vp.GotoTop()
-			return m, nil
+			return nil
 		}
 	}
 
 	if !agent.Available() {
 		r.err = "claude CLI not found on PATH"
-		m.refreshPane()
-		return m, nil
+		return nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := agent.Run(ctx, u, m.notes[u.Name], m.updates)
-
 	r.cancel = cancel
 	r.ch = ch
 	r.running = true
 	r.start = time.Now()
-	m.refreshPane()
-	m.vp.GotoTop()
-	return m, tea.Batch(waitAgent(u.Name, ch), m.sp.Tick)
+	return waitAgent(u.Name, ch)
 }
 
 // saveAnalysis stores a finished run so reopening it is free.
@@ -975,15 +1060,26 @@ func (m Model) renderList(w int) string {
 		// A running analysis takes over the badge. With several in flight the
 		// title says how many but not which, and the badge is the only place
 		// the list can answer that without a third line per row.
-		mark := badge(u)
+		// Two cells including the trailing gap, so a row whose analysis is
+		// running lines up with one whose is not. The spinner's own frames
+		// already carry that gap; a badge does not.
+		mark := badge(u) + " "
 		if r := m.runs[u.Name]; r != nil && r.running {
 			mark = m.sp.View()
 		}
-		// Prefix is two cells of cursor plus badge and a space.
-		line := "  " + mark + " " + truncate(u.Name, avail-4)
+		// Two cells of prefix: the cursor, then the mark. Both fit in the
+		// width the badge already reserved, so a marked list does not reflow.
+		cur, sel := " ", stDim.Render(" ")
 		if i == m.cursor {
-			line = stSel.Render("❯ ") + mark + " " +
-				stSel.Render(truncate(u.Name, avail-4))
+			cur = "❯"
+		}
+		if m.marked[u.Name] {
+			sel = stMauve.Render("✓")
+		}
+		name := truncate(u.Name, avail-4)
+		line := cur + sel + mark + name
+		if i == m.cursor {
+			line = stSel.Render(cur) + sel + mark + stSel.Render(name)
 		}
 		b.WriteString(line + "\n")
 
@@ -1451,6 +1547,9 @@ func (m Model) View() string {
 	}
 	// Analyses run concurrently, so the count is the only place that says how
 	// many are still going once you have moved off them.
+	if n := len(m.marked); n > 0 {
+		sub += stMauve.Render(fmt.Sprintf(" · %d marked", n))
+	}
 	if n := m.runningCount(); n > 0 {
 		sub += stMauve.Render(fmt.Sprintf(" · %d analysing", n))
 	}
@@ -1472,11 +1571,20 @@ func (m Model) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
-	keys := "↑↓ move · ←→ manager · a analyse · enter read · i install · R rescan · q quit"
+	var keys string
+	if m.hasTabs() {
+		keys = "↑↓ move · ←→ tab · space mark · a analyse · enter read · i install · q quit"
+	} else {
+		keys = "↑↓ move · space mark · a analyse · enter read · i install · R rescan · q quit"
+	}
+	if len(m.marked) > 0 {
+		keys = fmt.Sprintf("%d marked · a analyse them · i install them · space unmark · c clear · q quit",
+			len(m.marked))
+	}
 	if r := m.run(); m.mode == paneAgent && r != nil && r.running && !m.focusRight {
-		keys = "↑↓ move · x cancel · enter read · q quit"
+		keys = "↑↓ move · x cancel · enter read · i install · q quit"
 	} else if m.focusRight {
-		keys = "scrolling right pane · esc back to list · x cancel · q quit"
+		keys = "↑↓ scroll · esc back to list · i install · x cancel · q quit"
 	}
 
 	if m.confirming {
@@ -1489,6 +1597,10 @@ func (m Model) View() string {
 			note = m.plan.why + " — y / n"
 		} else if m.plan.full {
 			note = "every manager, everything pending — y / n"
+		}
+		if n := m.runningCount(); n > 0 {
+			note = fmt.Sprintf("%d analysing, and will describe the versions "+
+				"installed now — %s", n, note)
 		}
 		keys = stYellow.Render("run `"+m.plan.label+"`? ") + stDim.Render(note)
 	}
