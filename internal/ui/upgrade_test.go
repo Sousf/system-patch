@@ -7,6 +7,7 @@ import (
 
 	"github.com/Sousf/system-patch/internal/agent"
 	"github.com/Sousf/system-patch/internal/model"
+	"github.com/Sousf/system-patch/internal/sources"
 )
 
 func TestShellJoinQuotesDangerousArgs(t *testing.T) {
@@ -83,8 +84,26 @@ func TestInstallPlanMatchesSelection(t *testing.T) {
 		strings.Join(p.argv, " ") != "flatpak update org.freedesktop.Platform.GL.default" {
 		t.Errorf("flatpak selection: got %+v", p)
 	}
-	if p := sel(3); !p.full || p.why == "" {
-		t.Errorf("repo selection must widen with a stated reason: got %+v", p)
+	// A repository package follows the host. Most families upgrade one as a
+	// matter of routine; where that is genuinely unsafe the plan stops and
+	// says so, because install on one row must never become upgrade
+	// everything behind a y.
+	p := sel(3)
+	if cmd := sources.Host().SingleUpgradeCmd("openssl"); cmd != nil {
+		if p.full || p.blocked != "" {
+			t.Errorf("repo selection should upgrade just that package here: got %+v", p)
+		}
+		if strings.Join(p.argv, " ") != strings.Join(cmd, " ") {
+			t.Errorf("repo selection: got %q, want %q",
+				strings.Join(p.argv, " "), strings.Join(cmd, " "))
+		}
+	} else {
+		if p.full {
+			t.Errorf("repo selection widened to the full upgrade: got %+v", p)
+		}
+		if p.blocked == "" {
+			t.Errorf("repo selection must say why it cannot run: got %+v", p)
+		}
 	}
 	if p := sel(0); !p.full || p.why != "" {
 		t.Errorf("system row: got %+v", p)

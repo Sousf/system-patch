@@ -62,6 +62,15 @@ type HostInfo struct {
 	ForeignNote string
 	// ArchNews reports whether the Arch announcement feed applies here.
 	ArchNews bool
+	// SingleUpgrade upgrades one repository package, with %s standing for its
+	// name. Empty where the family has no safe way to do it.
+	//
+	// Arch is the exception the rest were being judged by: getting a newer
+	// repository package there means syncing the database, and installing one
+	// package from a synced database is the partial upgrade the distribution
+	// warns about. Debian, Fedora and openSUSE upgrade one package as a matter
+	// of routine.
+	SingleUpgrade []string
 	// RepoManager is the command that owns this family's repository packages:
 	// pacman, apt, dnf. Names the origin where no single registry entry can,
 	// because the Arch entry reports repository and AUR packages together and
@@ -72,6 +81,19 @@ type HostInfo struct {
 	// failure worth naming, and the package is called linux on Arch, kernel on
 	// Fedora and kernel-default on openSUSE.
 	KernelNames []string
+}
+
+// SingleUpgradeCmd is the command to upgrade one repository package, or nil
+// where this family has no safe way to do it.
+func (h HostInfo) SingleUpgradeCmd(name string) []string {
+	if len(h.SingleUpgrade) == 0 {
+		return nil
+	}
+	out := make([]string, len(h.SingleUpgrade))
+	for i, a := range h.SingleUpgrade {
+		out[i] = strings.ReplaceAll(a, "%s", name)
+	}
+	return out
 }
 
 // IsKernel reports whether a package name is one of this family's kernels.
@@ -244,6 +266,7 @@ pactree, uname and expac do work if you need them.`
 		h.ArchNews = true
 
 	case Debian:
+		h.SingleUpgrade = []string{"sudo", "apt-get", "install", "--only-upgrade", "-y", "%s"}
 		h.RepoManager = "apt"
 		h.KernelNames = []string{"linux-image", "linux-generic", "linux-headers"}
 		h.DBNote = `  /var/lib/dpkg/status                          installed packages and versions
@@ -260,6 +283,7 @@ available. dpkg and apt are blocked, because both can also install.`
 			"upgraded in step with the distribution archive and are where version skew lands"
 
 	case Fedora:
+		h.SingleUpgrade = []string{"sudo", "dnf", "-y", "upgrade", "%s"}
 		h.RepoManager = "dnf"
 		h.KernelNames = []string{"kernel"}
 		h.DBNote = `  /var/lib/rpm                                  the rpm database
@@ -275,6 +299,7 @@ available. rpm and dnf are blocked, because both can also install.`
 			"rebuilt in step with the distribution"
 
 	case SUSE:
+		h.SingleUpgrade = []string{"sudo", "zypper", "--non-interactive", "update", "%s"}
 		h.RepoManager = "zypper"
 		h.KernelNames = []string{"kernel-default", "kernel"}
 		h.DBNote = `  /var/lib/rpm                                  the rpm database
@@ -287,6 +312,7 @@ uname is available. rpm and zypper are blocked, because both can also install.`
 			"could not merge"
 
 	case Alpine:
+		h.SingleUpgrade = []string{"sudo", "apk", "upgrade", "%s"}
 		h.RepoManager = "apk"
 		h.KernelNames = []string{"linux-lts", "linux-virt"}
 		h.DBNote = `  /lib/apk/db/installed                         installed packages
@@ -308,6 +334,7 @@ xbps-query is read-only and works. uname is available.`
 		h.ConfigConvention = ".new-<version> files left beside configs the upgrade could not replace"
 
 	case Gentoo:
+		h.SingleUpgrade = []string{"sudo", "emerge", "--update", "--oneshot", "%s"}
 		h.RepoManager = "portage"
 		h.KernelNames = []string{"gentoo-sources", "gentoo-kernel"}
 		h.DBNote = `  /var/db/pkg/<category>/<name>-<version>        installed packages

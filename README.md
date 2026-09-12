@@ -81,10 +81,14 @@ system-patch analyse <pkg>  run the source analysis headlessly
 system-patch prompt <pkg>   print the agent's brief without running it
 ```
 
-Keys: `↑↓`/`jk` move, `←→`/`hl` switch manager tab, `a` analyse the source,
-`A` re-analyse ignoring the stored answer, `i` upgrade everything, `r` reload
-notes, `R` rescan, `enter`/`tab` focus the right pane to scroll it, `x` cancel
-a running agent, `q` quit.
+Keys: `↑↓`/`jk` move, `←→`/`hl` switch manager tab, `space` mark a row and `c`
+clear the marks, `a` analyse the source, `A` re-analyse ignoring the stored
+answer, `i` install what is selected, `r` reload notes, `R` rescan, `enter`
+focus the right pane and `esc` come back, `x` cancel a running agent, `q` quit.
+
+`a` and `i` act on every marked row, or on the row under the cursor when
+nothing is marked. Several analyses run at once; the title counts them and each
+running row shows a spinner.
 Notes are cached under `XDG_CACHE_HOME` keyed by `name@old..new`.
 
 ## Maintainer tracking
@@ -171,15 +175,24 @@ From the command line: `system-patch analyse system`.
 
 ## Installing
 
-`i` installs what you have selected, after showing exactly what it will run:
+`i` installs what you have selected, after showing exactly what it will run.
+Mark several rows with space and it installs all of them.
 
-| Selected             | Runs                       | Why                                                                               |
-| -------------------- | -------------------------- | --------------------------------------------------------------------------------- |
-| an AUR package       | `paru -S <name>`           | builds against the system as it stands; no database sync, no partial-upgrade risk |
-| a flatpak ref        | `flatpak update <app>`     | flatpak refs are independent by design                                            |
-| a snap               | `sudo snap refresh <name>` | same                                                                              |
-| a repository package | the full upgrade           | see below                                                                         |
-| the system row       | the full upgrade           | every detected manager, in order                                                  |
+| Selected             | Runs                                     |
+| -------------------- | ---------------------------------------- |
+| an AUR package       | `paru -S <name>`                         |
+| a flatpak ref        | `flatpak update <app>`                   |
+| a snap               | `sudo snap refresh <name>`               |
+| a repository package | one-package upgrade, per distribution    |
+| the system row       | the full upgrade, every manager in order |
+
+The repository row depends on the distribution. Debian runs `apt-get install
+--only-upgrade`, Fedora `dnf upgrade <name>`, openSUSE `zypper update <name>`.
+
+Arch has no safe equivalent: fetching a newer repository package means syncing
+the database, and installing from a synced database is a partial upgrade. `i`
+says so and does nothing. Select the full system upgrade row to take
+everything.
 
 ## License
 

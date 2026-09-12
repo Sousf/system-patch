@@ -127,6 +127,9 @@ type Model struct {
 	// Survives the rescan an upgrade triggers, which overwrites warnings, so a
 	// failed upgrade is still on screen once the new list lands.
 	upgradeErr string
+	// notice answers a key that could not do what was asked, and clears on the
+	// next one. A key that does nothing and says nothing reads as a bug.
+	notice string
 
 	// Set while the install confirmation is on screen, holding what y runs.
 	confirming bool
@@ -279,6 +282,10 @@ type installPlan struct {
 	full bool
 	// why explains a widened plan, shown in the confirmation.
 	why string
+	// blocked holds the reason there is no command to offer. A plan that
+	// cannot run one package alone says so rather than quietly becoming a plan
+	// that upgrades everything.
+	blocked string
 }
 
 func (m *Model) installPlan() installPlan {
@@ -318,18 +325,21 @@ func planFor(ups []model.Update) installPlan {
 			argvs = append(argvs, []string{"sudo", "snap", "refresh", u.Name})
 			labels = append(labels, "sudo snap refresh "+u.Name)
 		default:
-			why := u.Name + " is a repository package, and one repo package " +
-				"cannot be safely installed alone (partial upgrade)"
-			if len(ups) > 1 {
-				why = u.Name + " is a repository package, so the whole " +
-					"selection widens to the full upgrade (no safe partial)"
+			// Most families upgrade one repository package as a matter of
+			// routine. Only where that is genuinely unsafe does the plan stop,
+			// and it stops rather than widening: pressing install on one row
+			// should never turn into upgrading everything behind a y.
+			if cmd := sources.Host().SingleUpgradeCmd(u.Name); cmd != nil {
+				argvs = append(argvs, cmd)
+				labels = append(labels, strings.Join(cmd, " "))
+				continue
 			}
-			return installPlan{
-				argv:  upgradeCmd(),
-				label: upgradeLabel(),
-				full:  true,
-				why:   why,
-			}
+			return installPlan{blocked: fmt.Sprintf(
+				"%s is a repository package, and %s has no safe way to upgrade "+
+					"one alone: fetching it syncs the database, and installing "+
+					"from a synced database is a partial upgrade. Select the "+
+					"full system upgrade row to take everything.",
+				u.Name, sources.Host().Describe())}
 		}
 	}
 
@@ -693,6 +703,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Any key answers the last refusal, so a message never outlives the
+	// question it was answering.
+	m.notice = ""
+
 	// The confirmation swallows every key while it is up, so a stray
 	// navigation press cannot fall through and start an upgrade.
 	if m.confirming {
@@ -854,7 +868,12 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// could be. An upgrade does leave a running analysis describing the
 		// versions it started with, so the confirmation says so and the
 		// decision stays the reader's.
-		m.plan = m.installPlan()
+		p := m.installPlan()
+		if p.blocked != "" {
+			m.notice = p.blocked
+			return m, nil
+		}
+		m.plan = p
 		m.confirming = true
 		return m, nil
 
@@ -1587,6 +1606,12 @@ func (m Model) View() string {
 		keys = "↑↓ scroll · esc back to list · i install · x cancel · q quit"
 	}
 
+	if m.notice != "" {
+		keys = stYellow.Render(m.notice)
+	}
+	if m.notice != "" {
+		keys = stYellow.Render(truncate(m.notice, m.w-1))
+	}
 	if m.confirming {
 		// Names exactly what y will run. When the plan is wider than the
 		// selection — a repo package, where no safe single-package path

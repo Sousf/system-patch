@@ -620,19 +620,55 @@ func TestUnmarkedFallsBackToTheCursor(t *testing.T) {
 	}
 }
 
-// One repository package in the set widens the whole thing, because there is
-// no safe way to install one repo package on its own.
-func TestRepoPackageWidensABatch(t *testing.T) {
+// A batch follows the host for its repository packages: composed where one can
+// be upgraded alone, stopped where it cannot. Never widened to the full upgrade
+// without being asked, which is what install on one row used to become.
+func TestRepoPackageInABatchFollowsTheHost(t *testing.T) {
 	ups := []model.Update{
 		{Name: "alpha", Origin: model.AUR},
 		{Name: "libvpx", Origin: model.Repo},
 	}
 	plan := planFor(ups)
-	if !plan.full {
-		t.Error("a batch containing a repository package did not widen to the full upgrade")
+	if plan.full {
+		t.Error("a batch widened to the full upgrade on its own")
 	}
-	if !strings.Contains(plan.why, "libvpx") {
-		t.Errorf("why = %q, does not name the row that forced it", plan.why)
+	if cmd := sources.Host().SingleUpgradeCmd("libvpx"); cmd != nil {
+		if plan.blocked != "" {
+			t.Errorf("blocked on a host that upgrades one package fine: %q", plan.blocked)
+		}
+		if !strings.Contains(plan.label, "alpha") || !strings.Contains(plan.label, "libvpx") {
+			t.Errorf("plan = %q, want both packages", plan.label)
+		}
+		return
+	}
+	if plan.blocked == "" {
+		t.Error("no command and no reason given")
+	}
+	if !strings.Contains(plan.blocked, "libvpx") {
+		t.Errorf("blocked = %q, does not name the row that stopped it", plan.blocked)
+	}
+}
+
+// Install on one row must never become upgrade everything. It did, behind a
+// confirmation whose y is muscle memory.
+func TestInstallNeverSilentlyWidens(t *testing.T) {
+	m := New()
+	m.w, m.h = 120, 40
+	m.updates = []model.Update{{Name: "libvpx", Origin: model.Repo}}
+	m.booting = false
+	m.layout()
+	m.cursor = 0
+
+	out, _ := m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	got := out.(Model)
+	if got.confirming && got.plan.full {
+		t.Fatalf("i on one package offered to upgrade everything: %q", got.plan.label)
+	}
+	if !got.confirming && got.notice == "" {
+		t.Error("i did nothing and said nothing")
+	}
+	if got.notice != "" && !strings.Contains(got.notice, "libvpx") {
+		t.Errorf("notice = %q, does not name the package", got.notice)
 	}
 }
 
