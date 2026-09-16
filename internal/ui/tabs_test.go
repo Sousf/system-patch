@@ -706,3 +706,59 @@ func TestClearKeyDropsEveryMark(t *testing.T) {
 		t.Errorf("%d marks survived c", n)
 	}
 }
+
+// The help line is one row of chrome. A confirmation naming several package
+// files runs long, and a wrapped line pushes the body off the bottom.
+func TestHelpLineNeverWraps(t *testing.T) {
+	m := New()
+	m.w, m.h = 60, 24
+	m.updates = []model.Update{{Name: "alpha", Origin: model.AUR}}
+	m.booting = false
+	m.layout()
+	m.confirming = true
+	m.plan = installPlan{label: strings.Repeat("very-long-package-name ", 12)}
+	for _, l := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(l); w > m.w {
+			t.Fatalf("a rendered line is %d cells wide in a %d-cell terminal", w, m.w)
+		}
+	}
+	if got := lipgloss.Height(m.View()); got > m.h {
+		t.Errorf("View() is %d rows in a %d-row terminal", got, m.h)
+	}
+}
+
+// A repository package on Arch installs from the package file resolved out of
+// checkupdates' private database, which never syncs the system's. Alone, that
+// is exactly the row asked for; it must not widen and must not be refused.
+func TestArchRepoRowInstallsFromThePackageFile(t *testing.T) {
+	if sources.Host().Family != sources.Arch {
+		t.Skip("resolution needs checkupdates' database, which only Arch has")
+	}
+	pending := sources.Load(0).Updates
+	var repo *model.Update
+	for i := range pending {
+		if pending[i].Origin == model.Repo {
+			repo = &pending[i]
+			break
+		}
+	}
+	if repo == nil {
+		t.Skip("no repository package pending to resolve")
+	}
+	p := planFor([]model.Update{*repo})
+	if p.full {
+		t.Fatalf("one repository row widened to the full upgrade: %q", p.label)
+	}
+	if p.blocked != "" {
+		t.Fatalf("one repository row was refused: %s", p.blocked)
+	}
+	if len(p.argv) < 4 || p.argv[0] != "sudo" || p.argv[1] != "pacman" || p.argv[2] != "-U" {
+		t.Fatalf("argv = %v, want sudo pacman -U <file>", p.argv)
+	}
+	if !strings.Contains(p.argv[3], repo.Name) {
+		t.Errorf("resolved file %q does not name %s", p.argv[3], repo.Name)
+	}
+	if !strings.Contains(p.label, repo.Name+"-") || strings.Contains(p.label, "://") {
+		t.Errorf("label = %q, want the file name without the mirror", p.label)
+	}
+}

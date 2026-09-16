@@ -292,6 +292,22 @@ func (m *Model) installPlan() installPlan {
 	return planFor(m.targets())
 }
 
+// labelFor renders a command for the confirmation with URL arguments reduced
+// to their file names. The full URL still runs; the mirror and directory are
+// where the bytes come from, and the file name is what is being installed.
+func labelFor(argv []string) string {
+	out := make([]string, len(argv))
+	for i, a := range argv {
+		if strings.Contains(a, "://") {
+			if j := strings.LastIndex(a, "/"); j >= 0 {
+				a = a[j+1:]
+			}
+		}
+		out[i] = a
+	}
+	return strings.Join(out, " ")
+}
+
 // planFor is what the install key will run for a set of rows.
 //
 // One repository package among them decides the whole plan: there is no safe
@@ -306,6 +322,7 @@ func planFor(ups []model.Update) installPlan {
 
 	var argvs [][]string
 	var labels []string
+	var repo []string
 	for _, u := range ups {
 		if agent.IsSystem(u) {
 			return installPlan{argv: upgradeCmd(), label: upgradeLabel(), full: true}
@@ -325,22 +342,25 @@ func planFor(ups []model.Update) installPlan {
 			argvs = append(argvs, []string{"sudo", "snap", "refresh", u.Name})
 			labels = append(labels, "sudo snap refresh "+u.Name)
 		default:
-			// Most families upgrade one repository package as a matter of
-			// routine. Only where that is genuinely unsafe does the plan stop,
-			// and it stops rather than widening: pressing install on one row
-			// should never turn into upgrading everything behind a y.
-			if cmd := sources.Host().SingleUpgradeCmd(u.Name); cmd != nil {
-				argvs = append(argvs, cmd)
-				labels = append(labels, strings.Join(cmd, " "))
-				continue
-			}
-			return installPlan{blocked: fmt.Sprintf(
-				"%s is a repository package, and %s has no safe way to upgrade "+
-					"one alone: fetching it syncs the database, and installing "+
-					"from a synced database is a partial upgrade. Select the "+
-					"full system upgrade row to take everything.",
-				u.Name, sources.Host().Describe())}
+			repo = append(repo, u.Name)
 		}
+	}
+
+	// Repository packages go in one command, so their dependencies are checked
+	// together as one transaction. On Arch that command is pacman -U of the
+	// package files, resolved from checkupdates' private database; it stops
+	// rather than widening if a file cannot be resolved, because install on a
+	// row must never turn into upgrading everything behind a y.
+	if len(repo) > 0 {
+		cmd := sources.Host().UpgradeSomeCmd(repo)
+		if cmd == nil {
+			return installPlan{blocked: fmt.Sprintf(
+				"no safe way to upgrade %s alone on %s. Select the full system "+
+					"upgrade row to take everything, or R to rescan first.",
+				strings.Join(repo, ", "), sources.Host().Describe())}
+		}
+		argvs = append(argvs, cmd)
+		labels = append(labels, labelFor(cmd))
 	}
 
 	if len(argvs) == 1 {
@@ -1633,6 +1653,12 @@ func (m Model) View() string {
 	head := title + sub
 	if tabs := m.renderTabs(); tabs != "" {
 		head += "\n" + tabs
+	}
+	// One row, always: a wrapped help line pushes the body off the bottom.
+	// MaxWidth cuts by visible cells, so a styled line is not sliced through
+	// an escape sequence.
+	if m.w > 0 && lipgloss.Width(keys) > m.w {
+		keys = lipgloss.NewStyle().MaxWidth(m.w).Render(keys)
 	}
 	return fmt.Sprintf("%s\n%s\n\n%s", head, body, stDim.Render(keys))
 }

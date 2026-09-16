@@ -2,8 +2,10 @@ package sources
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Family is the packaging tradition a machine belongs to.
@@ -83,18 +85,78 @@ type HostInfo struct {
 	KernelNames []string
 }
 
-// SingleUpgradeCmd is the command to upgrade one repository package, or nil
-// where this family has no safe way to do it.
-func (h HostInfo) SingleUpgradeCmd(name string) []string {
+// UpgradeSomeCmd is one command that upgrades exactly these repository
+// packages, or nil where this family has no safe way to do it.
+//
+// Arch is resolved rather than templated. Fetching a newer package there
+// normally means syncing the database, and installing from a synced database
+// is the partial upgrade the distribution warns about. But checkupdates keeps
+// its own synced copy of the database, never the system's, and pacman -Sp
+// against that copy yields the new package's URL without touching anything.
+// pacman -U then installs that one file and checks its dependencies against
+// what is installed: satisfied, it works; not satisfied, it refuses. Neither
+// outcome is a partial upgrade. This is the wiki's own answer to "just this
+// one", and it was being refused outright.
+func (h HostInfo) UpgradeSomeCmd(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	if h.Family == Arch {
+		urls := archPackageURLs(names)
+		if len(urls) != len(names) {
+			return nil
+		}
+		return append([]string{"sudo", "pacman", "-U"}, urls...)
+	}
 	if len(h.SingleUpgrade) == 0 {
 		return nil
 	}
-	out := make([]string, len(h.SingleUpgrade))
-	for i, a := range h.SingleUpgrade {
-		out[i] = strings.ReplaceAll(a, "%s", name)
+	var out []string
+	for _, a := range h.SingleUpgrade {
+		if a == "%s" {
+			out = append(out, names...)
+			continue
+		}
+		out = append(out, a)
 	}
 	return out
 }
+
+// SingleUpgradeCmd is UpgradeSomeCmd for one package.
+func (h HostInfo) SingleUpgradeCmd(name string) []string {
+	return h.UpgradeSomeCmd([]string{name})
+}
+
+// archPackageURLs resolves package files from checkupdates' private database.
+//
+// The path is checkupdates' own default, overridable the same way it is
+// there. Nothing here writes: -Sp prints what -S would download and stops.
+func archPackageURLs(names []string) []string {
+	db := os.Getenv("CHECKUPDATES_DB")
+	if db == "" {
+		tmp := os.Getenv("TMPDIR")
+		if tmp == "" {
+			tmp = "/tmp"
+		}
+		db = tmp + "/checkup-db-" + itoa(os.Getuid())
+	}
+	if _, err := os.Stat(db); err != nil {
+		return nil
+	}
+	args := append([]string{"-Sp", "--dbpath", db}, names...)
+	out := run(30*time.Second, "pacman", args...)
+	var urls []string
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://") ||
+			strings.HasPrefix(l, "file://") {
+			urls = append(urls, l)
+		}
+	}
+	return urls
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // IsKernel reports whether a package name is one of this family's kernels.
 func (h HostInfo) IsKernel(name string) bool {

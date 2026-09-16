@@ -189,10 +189,11 @@ Mark several rows with space and it installs all of them.
 The repository row depends on the distribution. Debian runs `apt-get install
 --only-upgrade`, Fedora `dnf upgrade <name>`, openSUSE `zypper update <name>`.
 
-Arch has no safe equivalent: fetching a newer repository package means syncing
-the database, and installing from a synced database is a partial upgrade. `i`
-says so and does nothing. Select the full system upgrade row to take
-everything.
+On Arch it runs `sudo pacman -U <file>`, with the file resolved from the
+database `checkupdates` keeps in `/tmp`. The system database is never synced,
+so this is not a partial upgrade: pacman checks the file's dependencies against
+what is installed and refuses if they are not met. Several marked repository
+rows go into one `pacman -U`, so their dependencies are checked together.
 
 ## License
 
