@@ -31,3 +31,10 @@ CI (`.github/workflows/ci.yml`) runs the same commands on every pull request.
 - `packaging/aur/` — AUR packaging; `pkgver` and checksums are set at
   release time.
 - `demo.tape` — recorded by hand with vhs against a live machine.
+
+## Learned by MARSHAL
+
+Facts recorded by MARSHAL from its own runs, reviewed in the pull requests that added them.
+
+- Some tests in `internal/ui` and `internal/sources` call `sources.Host()`, which reads the machine running the tests, so results can differ between an Arch workstation and the Ubuntu CI runner.
+- CI installs exactly the Go version in `go.mod`'s `go` line (currently `1.27.0`) with `GOTOOLCHAIN=local`, so `govulncheck` in CI can report standard-library vulnerabilities that a newer local Go patch release doesn't show.
