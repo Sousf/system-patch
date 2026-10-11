@@ -40,7 +40,7 @@ func parseInfo(out string) map[string]Deps {
 		}
 		cur, d = "", Deps{}
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		k, v, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
@@ -126,7 +126,7 @@ func SonameChanges(before, after []string) []string {
 func Foreign() map[string]bool {
 	out := run(60*time.Second, "pacman", "-Qmq")
 	set := map[string]bool{}
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if l = strings.TrimSpace(l); l != "" {
 			set[l] = true
 		}
@@ -390,7 +390,7 @@ func debDeps(name string) (Deps, bool) {
 		}
 		var d Deps
 		seen := map[string]bool{name: true}
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			// Data lines are indented; the package name and the "Reverse
 			// Depends:" header are not. Alternatives carry a leading pipe.
 			if line == "" || !strings.HasPrefix(line, " ") {

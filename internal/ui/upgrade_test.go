@@ -89,7 +89,7 @@ func TestInstallPlanMatchesSelection(t *testing.T) {
 	// says so, because install on one row must never become upgrade
 	// everything behind a y.
 	p := sel(3)
-	if cmd := sources.Host().SingleUpgradeCmd("openssl"); cmd != nil {
+	if cmd := sources.Host().UpgradeSomeCmd([]string{"openssl"}); cmd != nil {
 		if p.full || p.blocked != "" {
 			t.Errorf("repo selection should upgrade just that package here: got %+v", p)
 		}

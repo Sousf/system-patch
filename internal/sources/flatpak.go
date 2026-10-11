@@ -22,7 +22,7 @@ const (
 func installedFlatpaks() map[string]string {
 	out := run(60*time.Second, "flatpak", "list", listCols)
 	res := map[string]string{}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		f := strings.Split(strings.TrimRight(line, "\r"), "\t")
 		if len(f) < 3 || f[0] == "" {
 			continue
@@ -46,7 +46,7 @@ func FlatpakUpdates() []model.Update {
 	installed := installedFlatpaks()
 
 	var ups []model.Update
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		f := strings.Split(strings.TrimRight(line, "\r"), "\t")
 		if len(f) < 3 || f[0] == "" {
 			continue

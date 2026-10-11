@@ -1281,7 +1281,7 @@ func (m Model) renderNotes() string {
 		}
 		body := strings.TrimSpace(r.Body)
 		if body != "" {
-			for _, line := range strings.Split(body, "\n") {
+			for line := range strings.SplitSeq(body, "\n") {
 				fmt.Fprintf(&b, "  %s\n", truncate(line, m.vp.Width-4))
 			}
 		}

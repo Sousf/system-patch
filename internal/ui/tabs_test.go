@@ -632,7 +632,7 @@ func TestRepoPackageInABatchFollowsTheHost(t *testing.T) {
 	if plan.full {
 		t.Error("a batch widened to the full upgrade on its own")
 	}
-	if cmd := sources.Host().SingleUpgradeCmd("libvpx"); cmd != nil {
+	if cmd := sources.Host().UpgradeSomeCmd([]string{"libvpx"}); cmd != nil {
 		if plan.blocked != "" {
 			t.Errorf("blocked on a host that upgrades one package fine: %q", plan.blocked)
 		}
