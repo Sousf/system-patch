@@ -1517,7 +1517,9 @@ func tabLabel(ms []sources.Manager, o model.Origin) string {
 			continue
 		}
 		if name != "" {
-			return originName(o) // two managers feed it; neither names it
+			// Two managers feed it; neither names it. Not originName: on a
+			// Debian or Fedora host that is apt or dnf, one of the two.
+			return string(o)
 		}
 		name = m.Name
 	}
