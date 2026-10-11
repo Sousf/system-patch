@@ -24,6 +24,8 @@ commit range, the PKGBUILD diff. It comes back with the CVEs the update closes,
 what the patch notes claim, a read of the diff itself, and a verdict on whether
 to install.
 
+![system-patch: walking the update list, reading Chrome's release notes and its stored analysis](demo.gif)
+
 ## Install
 
 On Arch:
