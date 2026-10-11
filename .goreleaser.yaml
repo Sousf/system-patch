@@ -54,3 +54,27 @@ release:
     ```
 
     Or on Arch: `paru -S system-patch`
+
+# Written by MARSHAL onboarding. A formula rather than a cask, so it installs
+# on Linux too. Pushed over SSH with a deploy key that can write to the tap
+# and nothing else; `marshal tap-key system-patch` creates it.
+brews:
+  - name: system-patch
+    repository:
+      owner: Sousf
+      name: homebrew-tap
+      branch: main
+      git:
+        url: git@github.com:Sousf/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY_PATH }}"
+    directory: Formula
+    homepage: https://github.com/Sousf/system-patch
+    description: "A TUI tool that helps you determine whether to install a package update."
+    license: MIT
+    commit_author:
+      name: goreleaser
+      email: noreply@github.com
+    install: |
+      bin.install "system-patch"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/system-patch version")
