@@ -347,7 +347,7 @@ func cmdNotes(name string) int {
 			fmt.Printf("   %s\n", capList(r.CVEs, 12))
 		}
 		if b := strings.TrimSpace(r.Body); b != "" {
-			for _, line := range strings.Split(b, "\n") {
+			for line := range strings.SplitSeq(b, "\n") {
 				fmt.Println("   " + line)
 			}
 		}

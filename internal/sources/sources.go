@@ -53,7 +53,7 @@ func run(timeout time.Duration, name string, args ...string) string {
 // skipped rather than guessed at.
 func parseUpgrades(out string, origin model.Origin) []model.Update {
 	var ups []model.Update
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 4 && f[2] == "->" {
 			ups = append(ups, model.Update{Name: f[0], Cur: f[1], New: f[3], Origin: origin})
@@ -153,7 +153,7 @@ func RepoURLs(names []string) map[string]string {
 	out := run(60*time.Second, "pacman", append([]string{"-Si"}, names...)...)
 	urls := map[string]string{}
 	var cur string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		k, v, ok := strings.Cut(line, ":")
 		if !ok {
 			continue

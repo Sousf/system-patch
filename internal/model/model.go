@@ -227,7 +227,7 @@ func VParts(s string) []int {
 		return nil
 	}
 	var out []int
-	for _, p := range strings.Split(m[1], ".") {
+	for p := range strings.SplitSeq(m[1], ".") {
 		n, err := strconv.Atoi(p)
 		if err != nil {
 			break

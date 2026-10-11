@@ -94,7 +94,7 @@ func home(rest ...string) string {
 // headers, warnings and progress lines mixed in with data.
 func simple(origin model.Origin, out string, parse func(string) (string, string, string, bool)) []model.Update {
 	var ups []model.Update
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if name, cur, next, ok := parse(line); ok {
 			ups = append(ups, model.Update{
 				Name: name, Cur: cur, New: next, Origin: origin,

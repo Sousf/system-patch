@@ -122,11 +122,6 @@ func (h HostInfo) UpgradeSomeCmd(names []string) []string {
 	return out
 }
 
-// SingleUpgradeCmd is UpgradeSomeCmd for one package.
-func (h HostInfo) SingleUpgradeCmd(name string) []string {
-	return h.UpgradeSomeCmd([]string{name})
-}
-
 // archPackageURLs resolves package files from checkupdates' private database.
 //
 // The path is checkupdates' own default, overridable the same way it is
@@ -146,7 +141,7 @@ func archPackageURLs(names []string) []string {
 	args := append([]string{"-Sp", "--dbpath", db}, names...)
 	out := run(30*time.Second, "pacman", args...)
 	var urls []string
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		l = strings.TrimSpace(l)
 		if strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://") ||
 			strings.HasPrefix(l, "file://") {
@@ -204,7 +199,7 @@ func osRelease() map[string]string {
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(string(b), "\n") {
+		for line := range strings.SplitSeq(string(b), "\n") {
 			k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
 			if !ok {
 				continue
@@ -278,7 +273,7 @@ func hostFrom(rel map[string]string, hasBin func(string) bool) HostInfo {
 			if id == n {
 				return true
 			}
-			for _, l := range strings.Fields(like) {
+			for l := range strings.FieldsSeq(like) {
 				if l == n {
 					return true
 				}
