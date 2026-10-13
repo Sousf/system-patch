@@ -34,6 +34,12 @@ On Arch:
 paru -S system-patch
 ```
 
+With Homebrew on Linux:
+
+```sh
+brew install sousf/tap/system-patch
+```
+
 Anywhere else, with Go 1.27+:
 
 ```sh
