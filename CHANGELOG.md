@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.2 (2026-10-14)
+
+- Add Homebrew install instructions to README (#12)
+
 ## v0.1.1 (2026-10-12)
 
 - Remove dead SingleUpgradeCmd and range over SplitSeq in parsers (#10)
