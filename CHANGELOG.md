@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.3 (2026-10-18)
+
+- Bump goreleaser/goreleaser-action from 7.2.3 to 7.3.0 (#14)
+- Replace real-looking home path in test fixture (#16)
+
 ## v0.1.2 (2026-10-14)
 
 - Add Homebrew install instructions to README (#12)
