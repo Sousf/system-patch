@@ -17,8 +17,8 @@ func TestShellJoinQuotesDangerousArgs(t *testing.T) {
 		want string
 	}{
 		{"plain", []string{"paru", "-Syu"}, "paru -Syu"},
-		{"path", []string{"/home/p/.oh-my-zsh/tools/upgrade.sh"},
-			"/home/p/.oh-my-zsh/tools/upgrade.sh"},
+		{"path", []string{"/home/user/.oh-my-zsh/tools/upgrade.sh"},
+			"/home/user/.oh-my-zsh/tools/upgrade.sh"},
 		{
 			// The real reason this function exists: the Neovim command is a Lua
 			// snippet with spaces, braces and parentheses. Unquoted it becomes
