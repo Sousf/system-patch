@@ -40,3 +40,4 @@ Facts recorded by MARSHAL from its own runs, reviewed in the pull requests that 
 - CI installs exactly the Go version in `go.mod`'s `go` line (currently `1.27.0`) with `GOTOOLCHAIN=local`, so `govulncheck` in CI can report standard-library vulnerabilities that a newer local Go patch release doesn't show.
 - `go.mod` has a `toolchain` line, and the pinned `actions/setup-go` installs that version (instead of the `go` line's version) when it is present. So CI's Go patch release follows the `toolchain` line, which is currently `go1.27.2`.
 - `golang.org/x/net` v0.60.0 requires `golang.org/x/text` ≥ v0.42.0, `golang.org/x/sys` ≥ v0.48.0 and `golang.org/x/term` ≥ v0.46.0, so bumping x/net also bumps those modules.
+- The vulnerability workflow in `.github/workflows/ci.yml` runs `govulncheck` after `actions/setup-go` with `go-version-file: go.mod`. A reachable standard-library finding is therefore fixed by raising the `toolchain` line in `go.mod`.
