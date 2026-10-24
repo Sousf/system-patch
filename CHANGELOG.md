@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.4 (2026-10-24)
+
+- Raise Go toolchain to go1.27.3 for GO-2026-6809 (#18)
+- Raise Go toolchain to 1.27.3 for GO-2026-6809 (#19)
+
 ## v0.1.3 (2026-10-18)
 
 - Bump goreleaser/goreleaser-action from 7.2.3 to 7.3.0 (#14)
